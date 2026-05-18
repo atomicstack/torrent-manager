@@ -61,6 +61,10 @@ func Fetch(ctx context.Context, url, cookie string) ([]Item, error) {
 		i := Item{Title: it.Title, GUID: it.GUID, Link: it.Link}
 		if len(it.Enclosures) > 0 {
 			i.Enclosure = it.Enclosures[0].URL
+		} else {
+			// some trackers (e.g. TrackerA/tracker-a.example) ship the torrent URL in
+			// <link> instead of <enclosure>. fall back so downstream fetch works.
+			i.Enclosure = it.Link
 		}
 		out = append(out, i)
 	}

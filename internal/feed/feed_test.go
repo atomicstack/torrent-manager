@@ -64,6 +64,51 @@ func TestFetch_SendsCookie(t *testing.T) {
 	assert.Equal(t, "pass=abc123", gotCookie)
 }
 
+// TestFetch_NoEnclosureFallsBackToLink: TrackerA-style feeds expose the .torrent URL
+// in <link> instead of <enclosure>. Item.Enclosure must be populated from
+// <link> in that case so the downstream fetch can find the bytes.
+func TestFetch_NoEnclosureFallsBackToLink(t *testing.T) {
+	rss := `<?xml version="1.0"?><rss version="2.0"><channel><title>x</title>` +
+		`<link>http://x</link><description>x</description>` +
+		`<item>` +
+		`<title>Some.Show.S01E01.1080p.WEB-DL.mkv</title>` +
+		`<link>https://tracker.example/d.php?r=aabbccdd</link>` +
+		`</item>` +
+		`</channel></rss>`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(rss))
+	}))
+	defer srv.Close()
+
+	items, err := feed.Fetch(context.Background(), srv.URL, "")
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, "https://tracker.example/d.php?r=aabbccdd", items[0].Enclosure,
+		"missing <enclosure> should fall back to <link>")
+}
+
+// TestFetch_EnclosureWinsOverLink: when both are present, the explicit
+// <enclosure> URL takes precedence.
+func TestFetch_EnclosureWinsOverLink(t *testing.T) {
+	rss := `<?xml version="1.0"?><rss version="2.0"><channel><title>x</title>` +
+		`<link>http://x</link><description>x</description>` +
+		`<item>` +
+		`<title>Severance.S02E01.1080p.WEB-DL.mkv</title>` +
+		`<link>https://tracker.example/page/123</link>` +
+		`<enclosure url="https://tracker.example/dl/x.torrent" type="application/x-bittorrent" length="0"/>` +
+		`</item>` +
+		`</channel></rss>`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(rss))
+	}))
+	defer srv.Close()
+
+	items, err := feed.Fetch(context.Background(), srv.URL, "")
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, "https://tracker.example/dl/x.torrent", items[0].Enclosure)
+}
+
 func TestMatch_FirstWins(t *testing.T) {
 	shows := []feed.ShowRule{
 		{Name: "specific", Regex: regexp.MustCompile(`(?i)Severance.*1080p`)},
