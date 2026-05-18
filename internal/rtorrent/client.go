@@ -12,8 +12,11 @@ import (
 var ErrNotFound = errors.New("rtorrent: torrent not found")
 
 // Client is a goroutine-safe rtorrent XML-RPC client. Concurrent callers are
-// serialised via an internal mutex; rtorrent's xmlrpc handler is not robustly
-// concurrent at low ops/sec and the project never needs parallel calls.
+// serialised via an internal mutex held for the duration of one .call();
+// multi-call methods like GetStatus are NOT atomic across calls. The mutex's
+// purpose is to keep one rtorrent xmlrpc invocation from racing another at
+// the wire level — rtorrent's handler is not robustly concurrent at low ops/sec
+// — not to provide higher-level transaction semantics.
 type Client struct {
 	addr string
 	mu   sync.Mutex
@@ -51,8 +54,11 @@ func (c *Client) LoadTorrent(data []byte, knownHash string) (string, error) {
 	return strings.ToUpper(knownHash), nil
 }
 
-// GetStatus looks up a torrent by uppercase info hash. Returns ErrNotFound if
-// rtorrent emits a -501 fault.
+// GetStatus looks up a torrent by uppercase info hash. Returns ErrNotFound when
+// the d.name call's fault string matches rtorrent's "could not find info-hash"
+// pattern (either via faultCode -501 or the substring "not find"). Note: the
+// two underlying calls (d.name then d.complete) are NOT atomic — a concurrent
+// LoadTorrent or removal could land between them.
 func (c *Client) GetStatus(hash string) (api.TorrentStatus, error) {
 	hash = strings.ToUpper(hash)
 	name, err := c.call("d.name", xmlString(hash))
