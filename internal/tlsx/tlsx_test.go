@@ -7,13 +7,14 @@ import (
 	"testing"
 
 	"github.com/atomicstack/torrent-manager/internal/tlsx"
+	"github.com/atomicstack/torrent-manager/internal/tlsxtest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestServerAndClientConfigs_RoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	certs := tlsx.GenerateTestCerts(t, dir)
+	certs := tlsxtest.GenerateCerts(t, dir)
 
 	serverCfg, err := tlsx.ServerConfig(certs.CAPath, certs.ServerCertPath, certs.ServerKeyPath)
 	require.NoError(t, err)
@@ -39,8 +40,8 @@ func TestServerAndClientConfigs_RoundTrip(t *testing.T) {
 func TestClientConfig_RejectedByUnknownCA(t *testing.T) {
 	// server uses one CA; client uses a totally different one.
 	serverDir, clientDir := t.TempDir(), t.TempDir()
-	serverCerts := tlsx.GenerateTestCerts(t, serverDir)
-	clientCerts := tlsx.GenerateTestCerts(t, clientDir)
+	serverCerts := tlsxtest.GenerateCerts(t, serverDir)
+	clientCerts := tlsxtest.GenerateCerts(t, clientDir)
 
 	serverCfg, err := tlsx.ServerConfig(serverCerts.CAPath, serverCerts.ServerCertPath, serverCerts.ServerKeyPath)
 	require.NoError(t, err)

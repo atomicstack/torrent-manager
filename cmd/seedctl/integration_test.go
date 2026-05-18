@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/atomicstack/torrent-manager/internal/tlsx"
+	"github.com/atomicstack/torrent-manager/internal/tlsxtest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,7 +30,7 @@ func TestIntegration_AddAndGet(t *testing.T) {
 		"rtorrent unreachable → 503 on /healthz.")
 	_ = bytes.NewReader
 	_ = tls.VersionTLS13
-	_ = tlsx.GenerateTestCerts
+	_ = tlsxtest.GenerateCerts
 	_ = http.DefaultClient
 	_ = require.New
 	_ = assert.New

@@ -6,7 +6,7 @@ package main
 import (
 	"testing"
 
-	"github.com/atomicstack/torrent-manager/internal/tlsx"
+	"github.com/atomicstack/torrent-manager/internal/tlsxtest"
 )
 
 // TestIntegration_RealMTLS wires a real tls.Listener with a stub seedctl + a
@@ -19,5 +19,5 @@ func TestIntegration_RealMTLS(t *testing.T) {
 	// 4. build Config with real tls client config (ClientConfig) pointed at the seedctl URL
 	// 5. Run() against them; assert one matching item, one POST observed
 	t.Skip("flesh out per the design spec's integration matrix")
-	_ = tlsx.GenerateTestCerts
+	_ = tlsxtest.GenerateCerts
 }
