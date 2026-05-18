@@ -15,13 +15,13 @@ import (
 // stubClient implements the subset of rtorrent.Client used by handlers.
 type stubClient struct {
 	ping   func() (string, error)
-	load   func([]byte, string) (string, error)
+	load   func([]byte, string, string) (string, error)
 	status func(string) (api.TorrentStatus, error)
 }
 
-func (s *stubClient) Ping() (string, error)                          { return s.ping() }
-func (s *stubClient) LoadTorrent(b []byte, h string) (string, error) { return s.load(b, h) }
-func (s *stubClient) GetStatus(h string) (api.TorrentStatus, error)  { return s.status(h) }
+func (s *stubClient) Ping() (string, error)                                    { return s.ping() }
+func (s *stubClient) LoadTorrent(b []byte, h, d string) (string, error)        { return s.load(b, h, d) }
+func (s *stubClient) GetStatus(h string) (api.TorrentStatus, error)            { return s.status(h) }
 
 func TestHealthz_OK(t *testing.T) {
 	h := newHandler(&stubClient{ping: func() (string, error) { return "0.9.8", nil }})
@@ -66,7 +66,7 @@ func TestGetTorrent_Found(t *testing.T) {
 func TestPostTorrent_Adds(t *testing.T) {
 	called := false
 	h := newHandler(&stubClient{
-		load: func(b []byte, _ string) (string, error) {
+		load: func(b []byte, _ string, _ string) (string, error) {
 			called = true
 			assert.Equal(t, "fake-bytes", string(b))
 			return "DEADBEEF" + strings.Repeat("0", 32), nil
@@ -91,7 +91,7 @@ func TestPostTorrent_Duplicate(t *testing.T) {
 		status: func(string) (api.TorrentStatus, error) {
 			return api.TorrentStatus{InfoHash: "DEADBEEF" + strings.Repeat("0", 32), Name: "x"}, nil
 		},
-		load: func([]byte, string) (string, error) {
+		load: func([]byte, string, string) (string, error) {
 			t.Fatalf("load should not be called for duplicates")
 			return "", nil
 		},
@@ -102,4 +102,25 @@ func TestPostTorrent_Duplicate(t *testing.T) {
 	h.ServeHTTP(w, req)
 	require.Equal(t, 200, w.Code)
 	assert.Contains(t, w.Body.String(), `"added":false`)
+}
+
+func TestPostTorrent_AddsWithSaveDirectory(t *testing.T) {
+	var capturedDir string
+	h := newHandler(&stubClient{
+		load: func(b []byte, _ string, dir string) (string, error) {
+			capturedDir = dir
+			return "DEADBEEF" + strings.Repeat("0", 32), nil
+		},
+		status: func(string) (api.TorrentStatus, error) {
+			return api.TorrentStatus{}, rtorrent.ErrNotFound
+		},
+	})
+	req := httptest.NewRequest("POST", "/v1/torrents", strings.NewReader("fake-bytes"))
+	req.Header.Set("Content-Type", "application/x-bittorrent")
+	req.Header.Set("X-Info-Hash", "DEADBEEF"+strings.Repeat("0", 32))
+	req.Header.Set("X-Save-Directory", "/home/seedbox/t/tv/foo/season1")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	require.Equal(t, 200, w.Code)
+	assert.Equal(t, "/home/seedbox/t/tv/foo/season1", capturedDir)
 }

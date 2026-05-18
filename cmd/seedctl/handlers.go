@@ -14,7 +14,7 @@ import (
 
 type rtorrentClient interface {
 	Ping() (string, error)
-	LoadTorrent(bytes []byte, knownHash string) (string, error)
+	LoadTorrent(bytes []byte, knownHash, saveDir string) (string, error)
 	GetStatus(hash string) (api.TorrentStatus, error)
 }
 
@@ -74,7 +74,8 @@ func (h *handler) postTorrent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "read body", 400)
 		return
 	}
-	gotHash, err := h.c.LoadTorrent(body, hash)
+	saveDir := r.Header.Get("X-Save-Directory")
+	gotHash, err := h.c.LoadTorrent(body, hash, saveDir)
 	if err != nil {
 		http.Error(w, "load failed", 422)
 		return
