@@ -1,0 +1,18 @@
+# build artefacts
+/dist/
+/bin/
+
+# secrets, certs (NEVER commit private keys)
+/certs/*
+!/certs/.gitignore
+
+# editor crud
+.DS_Store
+*.swp
+.vscode/
+.idea/
+
+# go test detritus
+*.test
+*.out
+coverage.*

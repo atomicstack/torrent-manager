@@ -1,0 +1,3 @@
+# ignore everything in this directory; populated locally by `make certs`
+*
+!.gitignore
