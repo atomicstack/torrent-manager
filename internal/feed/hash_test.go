@@ -46,6 +46,29 @@ func TestExtractHash_NoMatch(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestExtractHash_GUIDWinsOverLinkAndEnclosure(t *testing.T) {
+	// all three fields carry distinct hashes; guid must win.
+	it := feed.Item{
+		GUID:      "https://tracker/torrent/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Link:      "https://tracker/torrent/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		Enclosure: "https://tracker/dl/cccccccccccccccccccccccccccccccccccccccc.torrent",
+	}
+	h, ok := feed.ExtractHash(it)
+	require.True(t, ok)
+	assert.Equal(t, strings.Repeat("A", 40), h)
+}
+
+func TestExtractHash_LinkWinsOverEnclosure(t *testing.T) {
+	// guid empty; link must win over enclosure.
+	it := feed.Item{
+		Link:      "https://tracker/torrent/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		Enclosure: "https://tracker/dl/cccccccccccccccccccccccccccccccccccccccc.torrent",
+	}
+	h, ok := feed.ExtractHash(it)
+	require.True(t, ok)
+	assert.Equal(t, strings.Repeat("B", 40), h)
+}
+
 func TestComputeHashFromTorrentBytes(t *testing.T) {
 	info := metainfo.Info{
 		PieceLength: 16384,
@@ -66,4 +89,10 @@ func TestComputeHashFromTorrentBytes(t *testing.T) {
 	got, err := feed.ComputeHashFromTorrentBytes(full)
 	require.NoError(t, err)
 	assert.Equal(t, expected, got)
+}
+
+func TestComputeHashFromTorrentBytes_Malformed(t *testing.T) {
+	_, err := feed.ComputeHashFromTorrentBytes([]byte("not bencode"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "metainfo load:")
 }

@@ -3,6 +3,7 @@ module github.com/atomicstack/torrent-manager
 go 1.26.3
 
 require (
+	github.com/anacrolix/torrent v1.61.0
 	github.com/mmcdole/gofeed v1.3.0
 	github.com/stretchr/testify v1.11.1
 )
@@ -12,7 +13,6 @@ require (
 	github.com/anacrolix/generics v0.1.1-0.20251125230353-15d98d46693b // indirect
 	github.com/anacrolix/missinggo v1.3.0 // indirect
 	github.com/anacrolix/missinggo/v2 v2.10.0 // indirect
-	github.com/anacrolix/torrent v1.61.0 // indirect
 	github.com/andybalholm/cascadia v1.3.1 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/huandu/xstrings v1.3.2 // indirect
