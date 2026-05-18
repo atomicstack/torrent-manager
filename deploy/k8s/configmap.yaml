@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tmgr-watchlist
+  namespace: torrent-manager
+data:
+  watchlist.yaml: |
+    seedctl_url: https://tiny.example.com:18443
+
+    shows:
+      - name: severance
+        regex: '(?i)^Severance.*S\d+E\d+.*1080p'
+
+    feeds:
+      - https://tracker.example/torrents/torrents.rss
