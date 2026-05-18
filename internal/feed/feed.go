@@ -22,8 +22,10 @@ type Item struct {
 
 // ShowRule is a single watchlist entry.
 type ShowRule struct {
-	Name  string // human label only — not used in matching
-	Regex *regexp.Regexp
+	Name      string // human label only — not used in matching
+	Regex     *regexp.Regexp
+	Category  string // optional: "tv" | "movies"
+	Directory string // optional: explicit show subdir name (lowercase, dot-separated)
 }
 
 // Fetch GETs the feed URL with an optional cookie header and returns the
