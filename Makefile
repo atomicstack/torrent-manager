@@ -44,7 +44,7 @@ deploy-seedhost: build-seedctl ## copy seedctl + certs to the seed host and inst
 	scp deploy/seedhost/seedctl.example.yaml seedbox@$(SEEDCTL_HOST):etc/seedctl/seedctl.yaml
 	scp certs/ca.crt certs/server.crt certs/server.key seedbox@$(SEEDCTL_HOST):etc/seedctl/
 	ssh seedbox@$(SEEDCTL_HOST) chmod 600 etc/seedctl/server.key
-	ssh seedbox@$(SEEDCTL_HOST) bash deploy/seedhost/install.sh
+	ssh seedbox@$(SEEDCTL_HOST) bash -s < deploy/seedhost/install.sh
 
 clean: ## remove dist/
 	rm -rf dist/
