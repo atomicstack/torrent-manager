@@ -27,7 +27,10 @@ type ShowRule struct {
 }
 
 // Fetch GETs the feed URL with an optional cookie header and returns the
-// parsed items. 10s deadline.
+// parsed items. Applies a 10s timeout via context.WithTimeout on top of any
+// deadline already on ctx (the shorter wins). The 10s is self-imposed inside
+// this function — http.DefaultClient has no top-level Timeout — so a caller
+// passing context.Background() will still be bounded by the 10s ceiling here.
 func Fetch(ctx context.Context, url, cookie string) ([]Item, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
