@@ -106,14 +106,11 @@ func processItem(ctx context.Context, cfg Config, hc *http.Client, it feed.Item,
 			return fmt.Errorf("fetch torrent: %w", err)
 		}
 	}
-	added, err := seedctlAdd(ctx, hc, cfg.SeedctlURL, hash, torrentBytes)
-	if err != nil {
+	if err := seedctlAdd(ctx, hc, cfg.SeedctlURL, hash, torrentBytes); err != nil {
 		return fmt.Errorf("seedctl add: %w", err)
 	}
-	if added {
-		r.Added++
-		slog.Info("added", "title", it.Title, "hash", hash, "rule", rule.Name)
-	}
+	r.Added++
+	slog.Info("added", "title", it.Title, "hash", hash, "rule", rule.Name)
 	return nil
 }
 
@@ -129,7 +126,7 @@ func fetchBytes(ctx context.Context, hc *http.Client, url, cookie string) ([]byt
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}
 	return io.ReadAll(resp.Body)
@@ -145,16 +142,16 @@ func seedctlGetStatus(ctx context.Context, hc *http.Client, base, hash string) (
 	}
 	defer resp.Body.Close()
 	switch resp.StatusCode {
-	case 200:
+	case http.StatusOK:
 		return true, nil
-	case 404:
+	case http.StatusNotFound:
 		return false, nil
 	default:
 		return false, fmt.Errorf("status %d", resp.StatusCode)
 	}
 }
 
-func seedctlAdd(ctx context.Context, hc *http.Client, base, hash string, body []byte) (bool, error) {
+func seedctlAdd(ctx context.Context, hc *http.Client, base, hash string, body []byte) error {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, "POST", base+"/v1/torrents", bytes.NewReader(body))
@@ -162,11 +159,11 @@ func seedctlAdd(ctx context.Context, hc *http.Client, base, hash string, body []
 	req.Header.Set("X-Info-Hash", hash)
 	resp, err := hc.Do(req)
 	if err != nil {
-		return false, err
+		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return false, errors.New(resp.Status)
+	if resp.StatusCode != http.StatusOK {
+		return errors.New(resp.Status)
 	}
-	return true, nil
+	return nil
 }
