@@ -175,7 +175,7 @@ func processItem(ctx context.Context, cfg Config, hc *http.Client, feedCookie st
 
 	if !hashFromFeed {
 		var err error
-		torrentBytes, err = fetchBytes(ctx, hc, it.Enclosure, feedCookie)
+		torrentBytes, err = fetchBytes(ctx, it.Enclosure, feedCookie)
 		if err != nil {
 			return fmt.Errorf("fetch torrent: %w", err)
 		}
@@ -222,7 +222,7 @@ func processItem(ctx context.Context, cfg Config, hc *http.Client, feedCookie st
 	// path skipped the initial download). inspect-logging happens here so the user
 	// can see what's about to be queued — applies to fetch AND enqueue modes.
 	if torrentBytes == nil {
-		torrentBytes, err = fetchBytes(ctx, hc, it.Enclosure, feedCookie)
+		torrentBytes, err = fetchBytes(ctx, it.Enclosure, feedCookie)
 		if err != nil {
 			return fmt.Errorf("fetch torrent: %w", err)
 		}
@@ -314,14 +314,17 @@ func normaliseShow(s string) string {
 	return strings.TrimRight(result, ".")
 }
 
-func fetchBytes(ctx context.Context, hc *http.Client, url, cookie string) ([]byte, error) {
+// fetchBytes downloads a public URL (a torrent file from a tracker). It
+// deliberately uses http.DefaultClient — system CAs — because the passed-in
+// mTLS client is scoped to seedctl and would reject public CA-signed certs.
+func fetchBytes(ctx context.Context, url, cookie string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if cookie != "" {
 		req.Header.Set("Cookie", cookie)
 	}
-	resp, err := hc.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
