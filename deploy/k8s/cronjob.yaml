@@ -14,6 +14,9 @@ spec:
       template:
         spec:
           restartPolicy: Never
+          securityContext:
+            # match runAsUser so secret/configmap mounts are readable to the pod
+            fsGroup: 65532
           containers:
             - name: tmgr
               # local image preloaded onto every node via `make image-import`.
@@ -61,4 +64,4 @@ spec:
             - name: tls
               secret:
                 secretName: tmgr-tls
-                defaultMode: 0400
+                defaultMode: 0440   # owner+group read; fsGroup=65532 grants the pod group access
