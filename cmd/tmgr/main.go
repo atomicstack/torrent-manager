@@ -68,7 +68,7 @@ func main() {
 					"env", ff.CookieEnv, "feed", ff.URL)
 			} else {
 				l := len(cookie)
-				if l < 16 {
+				if l < 24 {
 					logger.Info("tracker_cookie", "env", ff.CookieEnv, "len", l)
 				} else {
 					logger.Info("tracker_cookie", "env", ff.CookieEnv, "len", l,
