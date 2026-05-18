@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -23,6 +24,12 @@ type Feed struct {
 	Name   string // human-readable label; falls back to URL in logs if empty
 	URL    string
 	Cookie string // empty = no Cookie header sent
+
+	// TitleExtract is an optional regex with exactly one capture group. When set,
+	// it is applied to each item's <title>; capture-group-1 becomes the canonical
+	// title used for rule matching and downstream logging. If the pattern doesn't
+	// match a given title, the raw title is used as-is.
+	TitleExtract *regexp.Regexp
 }
 
 // Roots holds the base filesystem paths for each media category.
@@ -57,6 +64,19 @@ func (c Config) effectiveMode() Mode {
 		return ModeEnqueue
 	}
 	return c.Mode
+}
+
+// extractTitle applies a feed's optional title-shaping regex. If re is nil, or
+// the regex misses, the raw title is returned unchanged.
+func extractTitle(re *regexp.Regexp, raw string) string {
+	if re == nil {
+		return raw
+	}
+	m := re.FindStringSubmatch(raw)
+	if len(m) < 2 {
+		return raw
+	}
+	return m[1]
 }
 
 // RunResult summarises what happened during one tick.
@@ -113,6 +133,7 @@ func Run(ctx context.Context, cfg Config, hc *http.Client) (RunResult, error) {
 			"duration_ms", time.Since(fetchStart).Milliseconds())
 		r.Items += len(items)
 		for _, it := range items {
+			it.Title = extractTitle(f.TitleExtract, it.Title)
 			rule, ok := feed.Match(it.Title, feedLabel, cfg.Shows)
 			if !ok {
 				slog.Debug("item_no_match", "feed", feedLabel, "title", it.Title)

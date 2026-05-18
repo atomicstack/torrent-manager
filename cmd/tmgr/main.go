@@ -15,9 +15,10 @@ import (
 )
 
 type fileFeed struct {
-	Name      string `yaml:"name,omitempty"`
-	URL       string `yaml:"url"`
-	CookieEnv string `yaml:"cookie_env,omitempty"`
+	Name         string `yaml:"name,omitempty"`
+	URL          string `yaml:"url"`
+	CookieEnv    string `yaml:"cookie_env,omitempty"`
+	TitleExtract string `yaml:"title_extract,omitempty"`
 }
 
 type fileRoots struct {
@@ -121,7 +122,26 @@ func main() {
 				}
 			}
 		}
-		feeds = append(feeds, Feed{Name: ff.Name, URL: ff.URL, Cookie: cookie})
+		var titleExtract *regexp.Regexp
+		if ff.TitleExtract != "" {
+			re, err := regexp.Compile(ff.TitleExtract)
+			if err != nil {
+				logger.Error("bad title_extract regex", "feed", ff.Name, "err", err)
+				os.Exit(1)
+			}
+			if re.NumSubexp() != 1 {
+				logger.Error("title_extract must have exactly one capture group",
+					"feed", ff.Name, "groups", re.NumSubexp())
+				os.Exit(1)
+			}
+			titleExtract = re
+		}
+		feeds = append(feeds, Feed{
+			Name:         ff.Name,
+			URL:          ff.URL,
+			Cookie:       cookie,
+			TitleExtract: titleExtract,
+		})
 	}
 
 	anthropicKey := os.Getenv("ANTHROPIC_API_KEY")

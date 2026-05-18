@@ -426,6 +426,84 @@ func TestRun_FetchMode(t *testing.T) {
 	assert.Zero(t, posts, "seedctl POST must NOT be called in fetch mode")
 }
 
+// TestRun_TitleExtractStripsWrapper: with a feed-level title_extract regex,
+// a wrapped title that the show regex would otherwise reject must match after
+// the extract step.
+func TestRun_TitleExtractStripsWrapper(t *testing.T) {
+	rss := `<?xml version="1.0"?><rss version="2.0"><channel><title>x</title><link>http://x</link>` +
+		`<description>x</description>` +
+		`<item><title> File: Last.Week.Tonight.With.John.Oliver.S13E12.REPACK.1080p.HMAX.WEB-DL.mkv Thread: Last Week Tonight - Season 13</title>` +
+		`<link>https://tracker.example/d.php?r=aabbccdd</link></item>` +
+		`</channel></rss>`
+	feedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(rss))
+	}))
+	defer feedSrv.Close()
+
+	// regex with the user's typical anchored shape — fails on the wrapped title
+	rule := feed.ShowRule{
+		Name:      "last week tonight",
+		Regex:     regexp.MustCompile(`(?i)^last.week.tonight.*1080p.*$`),
+		Category:  "tv",
+		Directory: "last.week.tonight",
+	}
+	extract := regexp.MustCompile(`^\s*File:\s+(.+?)\s+Thread:`)
+
+	cfg := Config{
+		Mode:       ModeObserve,
+		SeedctlURL: "http://127.0.0.1:1",
+		Feeds:      []Feed{{Name: "TrackerA (TV)", URL: feedSrv.URL, TitleExtract: extract}},
+		Roots:      Roots{TV: "/tv-root"},
+		Shows:      []feed.ShowRule{rule},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	res, err := Run(ctx, cfg, &http.Client{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Matched, "wrapped title should match after title_extract")
+}
+
+// TestRun_TitleExtractMissFallsBackToRaw: an item whose title doesn't match
+// the extract pattern is still passed through to the matcher as-is.
+func TestRun_TitleExtractMissFallsBackToRaw(t *testing.T) {
+	rss := `<?xml version="1.0"?><rss version="2.0"><channel><title>x</title><link>http://x</link>` +
+		`<description>x</description>` +
+		`<item><title>Bobs.Burgers.S16E14.1080p.WEB.h264-EDITH.mkv</title>` +
+		`<link>https://tracker.example/d.php?r=aabbccdd</link></item>` +
+		`</channel></rss>`
+	feedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(rss))
+	}))
+	defer feedSrv.Close()
+
+	rule := feed.ShowRule{
+		Name:      "bob burger",
+		Regex:     regexp.MustCompile(`(?i)bobs.burgers.*1080`),
+		Category:  "tv",
+		Directory: "bobs.burgers",
+	}
+	// extract pattern won't match this title — fallback to raw must let the
+	// rule still hit.
+	extract := regexp.MustCompile(`^\s*File:\s+(.+?)\s+Thread:`)
+
+	cfg := Config{
+		Mode:       ModeObserve,
+		SeedctlURL: "http://127.0.0.1:1",
+		Feeds:      []Feed{{Name: "clean-feed", URL: feedSrv.URL, TitleExtract: extract}},
+		Roots:      Roots{TV: "/tv-root"},
+		Shows:      []feed.ShowRule{rule},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	res, err := Run(ctx, cfg, &http.Client{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Matched, "unwrapped title should still match when extract misses")
+}
+
 // TestRun_FeedLogsUseName verifies that when a named feed fails to fetch,
 // the error log record carries the feed's Name rather than the raw URL.
 func TestRun_FeedLogsUseName(t *testing.T) {
