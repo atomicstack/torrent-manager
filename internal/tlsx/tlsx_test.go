@@ -1,7 +1,6 @@
 package tlsx_test
 
 import (
-	"crypto/tls"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -57,6 +56,4 @@ func TestClientConfig_RejectedByUnknownCA(t *testing.T) {
 	_, err = hc.Get(srv.URL)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown authority")
-
-	_ = tls.VersionTLS13 // touch import to avoid unused
 }
