@@ -124,8 +124,10 @@ func TestRun_DedupSkip(t *testing.T) {
 	res, err := Run(ctx, cfg, &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}})
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.Matched)
-	assert.Equal(t, 0, res.Added) // dedup skipped the add
-	assert.Len(t, posted, 0)      // no POST made
+	assert.Equal(t, 1, res.Skipped) // dedup short-circuit
+	assert.Equal(t, 0, res.Added)
+	assert.Equal(t, 0, res.Errors)
+	assert.Len(t, posted, 0) // no POST made
 }
 
 // TestRun_PerFeedCookieIsolation verifies that when two feeds are configured,

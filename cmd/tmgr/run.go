@@ -86,6 +86,7 @@ type RunResult struct {
 	Items   int
 	Matched int
 	Queried int
+	Skipped int // matched-but-not-added because seedctl already has the hash
 	Added   int
 	Errors  int
 }
@@ -154,7 +155,7 @@ func Run(ctx context.Context, cfg Config, hc *http.Client) (RunResult, error) {
 	slog.Info("run_summary",
 		"mode", string(mode),
 		"feeds", r.Feeds, "items", r.Items, "matched", r.Matched,
-		"queried", r.Queried, "added", r.Added, "errors", r.Errors)
+		"queried", r.Queried, "skipped", r.Skipped, "added", r.Added, "errors", r.Errors)
 	return r, nil
 }
 
@@ -214,6 +215,7 @@ func processItem(ctx context.Context, cfg Config, hc *http.Client, feedCookie st
 	}
 	slog.Info("dedup_check", "title", it.Title, "hash", hash, "exists_on_seedctl", exists)
 	if exists {
+		r.Skipped++
 		slog.Info("skip_already_present", "title", it.Title, "hash", hash, "rule", rule.Name)
 		return nil
 	}
