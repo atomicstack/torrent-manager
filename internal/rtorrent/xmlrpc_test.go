@@ -14,8 +14,8 @@ func TestXMLRPCEncode_NoArgs(t *testing.T) {
 }
 
 func TestXMLRPCEncode_StringAndBase64(t *testing.T) {
-	got := encodeXMLRPCCall("load.raw_verbose", xmlString(""), xmlBase64([]byte("torrent-bytes")))
-	assert.Contains(t, got, "<methodName>load.raw_verbose</methodName>")
+	got := encodeXMLRPCCall("load.raw_start_verbose", xmlString(""), xmlBase64([]byte("torrent-bytes")))
+	assert.Contains(t, got, "<methodName>load.raw_start_verbose</methodName>")
 	assert.Contains(t, got, "<value><string></string></value>")
 	assert.Contains(t, got, "<value><base64>dG9ycmVudC1ieXRlcw==</base64></value>")
 }

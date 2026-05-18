@@ -42,19 +42,20 @@ func (c *Client) Ping() (string, error) {
 	return c.call("system.client_version")
 }
 
-// LoadTorrent uploads raw .torrent bytes via load.raw_verbose. The caller
-// supplies the precomputed info hash (sha1 of the bencoded info dict) so the
-// return value identifies which torrent rtorrent now knows about; rtorrent's
-// load.raw_verbose returns 0 on success without echoing the hash.
+// LoadTorrent uploads raw .torrent bytes via load.raw_start_verbose, which
+// both loads AND starts the torrent atomically. The caller supplies the
+// precomputed info hash (sha1 of the bencoded info dict) so the return value
+// identifies which torrent rtorrent now knows about; load.raw_start_verbose
+// returns 0 on success without echoing the hash.
 // If saveDir is non-empty, sets the torrent's download directory via
-// d.directory.set; rtorrent (and the filesystem) create intermediate
-// dirs as needed.
+// d.directory.set; rtorrent (and the filesystem) create intermediate dirs
+// as needed.
 func (c *Client) LoadTorrent(data []byte, knownHash, saveDir string) (string, error) {
 	args := []xmlValue{xmlString(""), xmlBase64(data)}
 	if saveDir != "" {
 		args = append(args, xmlString("d.directory.set="+saveDir))
 	}
-	_, err := c.call("load.raw_verbose", args...)
+	_, err := c.call("load.raw_start_verbose", args...)
 	if err != nil {
 		return "", err
 	}

@@ -73,7 +73,7 @@ func TestClient_Ping(t *testing.T) {
 }
 
 func TestClient_LoadTorrent_ReturnsHash(t *testing.T) {
-	// rtorrent returns "0" on load.raw_verbose success; we don't try to look up
+	// rtorrent returns "0" on load.raw_start_verbose success; we don't try to look up
 	// the hash afterwards — we trust the caller's precomputed hash.
 	loadOK := []byte("Content-Type: text/xml\r\n\r\n<methodResponse><params><param><value><i4>0</i4></value></param></params></methodResponse>")
 	f := newFakeRTorrent(t, loadOK)
@@ -83,7 +83,7 @@ func TestClient_LoadTorrent_ReturnsHash(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF", hash) // uppercased
 	require.Len(t, f.requests, 1)
-	assert.Contains(t, string(f.requests[0]), "load.raw_verbose")
+	assert.Contains(t, string(f.requests[0]), "load.raw_start_verbose")
 	assert.Contains(t, string(f.requests[0]), "<base64>") // bytes are base64-encoded
 }
 
