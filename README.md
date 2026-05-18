@@ -48,9 +48,60 @@ kubectl --kubeconfig ~/.kube/rpi-sandbox.yaml -n torrent-manager \
   --from-file=ca.crt=certs/ca.crt \
   --from-file=client.crt=certs/client.crt \
   --from-file=client.key=certs/client.key
+
+kubectl --kubeconfig ~/.kube/rpi-sandbox.yaml -n torrent-manager \
+  create secret generic tmgr-anthropic \
+  --from-literal=ANTHROPIC_API_KEY='<paste key>'
 ```
 
-edit `deploy/k8s/configmap.yaml` so `seedctl_url`, `shows[]`, and `feeds[]` reflect your trackers. for feeds that require authentication, add `cookie_env: YOUR_ENV_VAR_NAME` and ensure that key exists in the `tmgr-cookies` secret.
+edit `deploy/k8s/configmap.yaml` so `seedctl_url`, `roots`, `shows[]`, and `feeds[]` reflect your setup. for feeds that require authentication, add `cookie_env: YOUR_ENV_VAR_NAME` and ensure that key exists in the `tmgr-cookies` secret.
+
+### save directory routing
+
+tmgr routes each matched torrent to a jellyfin-compatible directory on the seed host based on the `category` field in each show rule.
+
+**tv shows** (`category: tv`):
+
+```yaml
+roots:
+  tv: /home/seedbox/t/tv
+
+shows:
+  - name: severance
+    regex: '(?i)^Severance.*S\d+E\d+.*1080p'
+    category: tv
+    directory: severance   # show subdir: lowercase, dot-separated
+```
+
+tmgr tells seedctl to put the torrent at `<roots.tv>/<directory>/season<N>` — e.g. `/home/seedbox/t/tv/severance/season2`. season number is extracted from the standard `SxxExx` pattern (case-insensitive, no zero-padding: `season1`, `season10`).
+
+if `directory` is omitted, the show name is normalised: lowercased, non-alphanumeric runs collapsed to `.`, e.g. `Its Always Sunny` → `its.always.sunny`.
+
+**movies** (`category: movies`):
+
+```yaml
+roots:
+  movies: /home/seedbox/t/movies
+
+shows:
+  - name: dune-part-2
+    regex: '(?i)^Dune.*Part.Two.*2024.*1080p'
+    category: movies
+```
+
+torrent lands at `<roots.movies>` directly; rtorrent creates its own subdirectory from the torrent name.
+
+**claude fallback** (rare: release titles without a `SxxExx` marker):
+
+if the regex can't find a season number and `ANTHROPIC_API_KEY` is set, tmgr calls `claude-opus-4-7` to extract `{show, season}` from the raw title. if the key is absent or the call fails, a warning is logged and the torrent is enqueued without a save-directory override (rtorrent uses its configured default).
+
+```
+# optional — only needed for unusual release title formats
+kubectl -n torrent-manager create secret generic tmgr-anthropic \
+  --from-literal=ANTHROPIC_API_KEY='sk-ant-…'
+```
+
+if you don't need the ai fallback (most installs won't), skip creating this secret. tmgr will warn at startup but continue normally.
 
 ### 4. (optional) migrate from rutorrent
 
