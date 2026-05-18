@@ -7,9 +7,19 @@ data:
   watchlist.yaml: |
     seedctl_url: https://tiny.example.com:18443
 
+    roots:
+      tv: /home/seedbox/t/tv
+      movies: /home/seedbox/t/movies
+
     shows:
       - name: severance
         regex: '(?i)^Severance.*S\d+E\d+.*1080p'
+        category: tv
+        directory: severance     # show subdir name: lowercase, dot-separated
+      - name: dune-part-2
+        regex: '(?i)^Dune.*Part.Two.*2024.*1080p'
+        category: movies
+        # no directory needed for movies
 
     feeds:
       - url: https://tracker-a.example/rss

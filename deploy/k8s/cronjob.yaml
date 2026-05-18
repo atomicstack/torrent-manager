@@ -26,6 +26,8 @@ spec:
               envFrom:
                 - secretRef:
                     name: tmgr-cookies
+                - secretRef:
+                    name: tmgr-anthropic
               volumeMounts:
                 - name: watchlist
                   mountPath: /etc/tmgr
