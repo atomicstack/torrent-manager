@@ -320,6 +320,112 @@ func TestRun_MoviesCategoryUsesMoviesRoot(t *testing.T) {
 	assert.Equal(t, "/movies-root", capturedSaveDir)
 }
 
+// TestRun_ObserveMode verifies that in observe mode the pipeline does NOT
+// touch the torrent download URL and does NOT call seedctl at all — it only
+// logs what it would do. Matched items are still counted.
+func TestRun_ObserveMode(t *testing.T) {
+	feedXML, err := os.ReadFile("../../internal/feed/testdata/valid.xml")
+	require.NoError(t, err)
+
+	var torrentDownloadHits int32
+	feedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".torrent") {
+			torrentDownloadHits++
+			http.Error(w, "must not be called", 500)
+			return
+		}
+		_, _ = w.Write(feedXML)
+	}))
+	defer feedSrv.Close()
+
+	var seedctlHits int32
+	seedctl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seedctlHits++
+		http.Error(w, "must not be called", 500)
+	}))
+	defer seedctl.Close()
+
+	cfg := Config{
+		Mode:       ModeObserve,
+		SeedctlURL: seedctl.URL,
+		Feeds:      []Feed{{Name: "obs-feed", URL: feedSrv.URL, Cookie: "pass=abc"}},
+		Roots:      Roots{TV: "/tv-root"},
+		Shows: []feed.ShowRule{
+			{Name: "severance", Regex: regexp.MustCompile(`(?i)Severance.*1080p`), Category: "tv", Directory: "severance"},
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	res, err := Run(ctx, cfg, &http.Client{})
+	require.NoError(t, err)
+	assert.Greater(t, res.Matched, 0, "should still recognise matches")
+	assert.Equal(t, 0, res.Queried, "must not query seedctl in observe mode")
+	assert.Equal(t, 0, res.Added)
+	assert.Zero(t, torrentDownloadHits, "must not download torrent bytes in observe mode")
+	assert.Zero(t, seedctlHits, "must not contact seedctl in observe mode")
+}
+
+// TestRun_FetchMode verifies that fetch mode performs the dedup-check against
+// seedctl but NEVER POSTs a torrent. Torrent bytes ARE downloaded so the hash
+// can be computed when the feed doesn't supply one.
+func TestRun_FetchMode(t *testing.T) {
+	feedXMLRaw, err := os.ReadFile("../../internal/feed/testdata/valid.xml")
+	require.NoError(t, err)
+
+	var feedSrvURL string
+	feedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".torrent") {
+			w.Header().Set("Content-Type", "application/x-bittorrent")
+			_, _ = w.Write([]byte("fake-torrent-content"))
+			return
+		}
+		rewritten := strings.ReplaceAll(string(feedXMLRaw),
+			"https://tracker.example/torrent/dl/",
+			feedSrvURL+"/dl/")
+		_, _ = w.Write([]byte(rewritten))
+	}))
+	defer feedSrv.Close()
+	feedSrvURL = feedSrv.URL
+
+	var gets, posts int32
+	seedctl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/v1/torrents/"):
+			gets++
+			http.Error(w, "nf", 404) // not yet present
+		case r.Method == "POST":
+			posts++
+			http.Error(w, "must not POST in fetch mode", 500)
+		default:
+			http.Error(w, "bad", 400)
+		}
+	}))
+	defer seedctl.Close()
+
+	cfg := Config{
+		Mode:       ModeFetch,
+		SeedctlURL: seedctl.URL,
+		Feeds:      []Feed{{Name: "fetch-feed", URL: feedSrv.URL, Cookie: "pass=abc"}},
+		Roots:      Roots{TV: "/tv-root"},
+		Shows: []feed.ShowRule{
+			{Name: "severance", Regex: regexp.MustCompile(`(?i)Severance.*1080p`), Category: "tv", Directory: "severance"},
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	res, err := Run(ctx, cfg, &http.Client{})
+	require.NoError(t, err)
+	assert.Greater(t, res.Matched, 0)
+	assert.Equal(t, res.Matched, res.Queried, "fetch mode must dedup-check every matched item")
+	assert.Equal(t, 0, res.Added)
+	assert.Greater(t, gets, int32(0), "seedctl GET must be called")
+	assert.Zero(t, posts, "seedctl POST must NOT be called in fetch mode")
+}
+
 // TestRun_FeedLogsUseName verifies that when a named feed fails to fetch,
 // the error log record carries the feed's Name rather than the raw URL.
 func TestRun_FeedLogsUseName(t *testing.T) {

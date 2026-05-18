@@ -31,6 +31,16 @@ type Roots struct {
 	Movies string
 }
 
+// Mode controls how far the pipeline runs for each matched item. Use it as a
+// safety throttle while bringing the deployment up.
+type Mode string
+
+const (
+	ModeObserve Mode = "observe" // log only; no torrent download, no seedctl traffic
+	ModeFetch   Mode = "fetch"   // download torrent + compute hash + dedup-check seedctl; no POST
+	ModeEnqueue Mode = "enqueue" // full pipeline (default)
+)
+
 // Config holds the runtime parameters for a single Run tick.
 type Config struct {
 	SeedctlURL   string
@@ -38,6 +48,15 @@ type Config struct {
 	Shows        []feed.ShowRule
 	Roots        Roots
 	AnthropicKey string // empty = no AI fallback
+	Mode         Mode   // "" defaults to ModeEnqueue
+}
+
+// effectiveMode resolves an empty Mode to the default.
+func (c Config) effectiveMode() Mode {
+	if c.Mode == "" {
+		return ModeEnqueue
+	}
+	return c.Mode
 }
 
 // RunResult summarises what happened during one tick.
@@ -58,6 +77,9 @@ func Run(ctx context.Context, cfg Config, hc *http.Client) (RunResult, error) {
 	var r RunResult
 	r.Feeds = len(cfg.Feeds)
 
+	mode := cfg.effectiveMode()
+	slog.Info("run_start", "mode", string(mode), "feeds", r.Feeds, "shows", len(cfg.Shows))
+
 	// startup jitter — skipped if context already has a deadline shorter than 30s
 	if dl, ok := ctx.Deadline(); !ok || time.Until(dl) > 30*time.Second {
 		jitter := time.Duration(rand.Intn(30_000)) * time.Millisecond
@@ -73,19 +95,26 @@ func Run(ctx context.Context, cfg Config, hc *http.Client) (RunResult, error) {
 		if feedLabel == "" {
 			feedLabel = f.URL
 		}
+		slog.Info("feed_start", "feed", feedLabel)
 		items, err := feed.Fetch(ctx, f.URL, f.Cookie)
 		if err != nil {
 			slog.Error("feed_fetch", "feed", feedLabel, "err", err)
 			r.Errors++
 			continue
 		}
+		slog.Info("feed_items", "feed", feedLabel, "count", len(items))
 		r.Items += len(items)
 		for _, it := range items {
 			rule, ok := feed.Match(it.Title, cfg.Shows)
 			if !ok {
+				slog.Debug("item_no_match", "feed", feedLabel, "title", it.Title)
 				continue
 			}
 			r.Matched++
+			hashFromFeed, _ := feed.ExtractHash(it)
+			slog.Info("item_matched",
+				"feed", feedLabel, "title", it.Title,
+				"rule", rule.Name, "hash_from_feed", hashFromFeed)
 			if err := processItem(ctx, cfg, hc, f.Cookie, it, rule, &r); err != nil {
 				slog.Error("process_item", "title", it.Title, "err", err)
 				r.Errors++
@@ -93,15 +122,28 @@ func Run(ctx context.Context, cfg Config, hc *http.Client) (RunResult, error) {
 		}
 	}
 	slog.Info("run_summary",
+		"mode", string(mode),
 		"feeds", r.Feeds, "items", r.Items, "matched", r.Matched,
 		"queried", r.Queried, "added", r.Added, "errors", r.Errors)
 	return r, nil
 }
 
 func processItem(ctx context.Context, cfg Config, hc *http.Client, feedCookie string, it feed.Item, rule feed.ShowRule, r *RunResult) error {
-	hash, ok := feed.ExtractHash(it)
+	mode := cfg.effectiveMode()
+
+	hash, hashFromFeed := feed.ExtractHash(it)
 	var torrentBytes []byte
-	if !ok {
+
+	// observe mode: log everything we can determine without fetching, then return.
+	if mode == ModeObserve {
+		slog.Info("observe_skip_fetch",
+			"title", it.Title, "rule", rule.Name,
+			"hash", hash, "hash_from_feed", hashFromFeed,
+			"enclosure", it.Enclosure)
+		return nil
+	}
+
+	if !hashFromFeed {
 		var err error
 		torrentBytes, err = fetchBytes(ctx, hc, it.Enclosure, feedCookie)
 		if err != nil {
@@ -111,6 +153,7 @@ func processItem(ctx context.Context, cfg Config, hc *http.Client, feedCookie st
 		if err != nil {
 			return fmt.Errorf("compute hash: %w", err)
 		}
+		slog.Info("torrent_fetched_and_hashed", "title", it.Title, "hash", hash, "bytes", len(torrentBytes))
 	}
 
 	// compute save directory based on category
@@ -138,10 +181,19 @@ func processItem(ctx context.Context, cfg Config, hc *http.Client, feedCookie st
 	if err != nil {
 		return fmt.Errorf("seedctl status: %w", err)
 	}
+	slog.Info("dedup_check", "title", it.Title, "hash", hash, "exists_on_seedctl", exists)
 	if exists {
 		slog.Info("skip_already_present", "title", it.Title, "hash", hash, "rule", rule.Name)
 		return nil
 	}
+
+	// fetch mode: stop short of POSTing.
+	if mode == ModeFetch {
+		slog.Info("fetch_mode_skip_enqueue",
+			"title", it.Title, "hash", hash, "rule", rule.Name, "save_dir", saveDir)
+		return nil
+	}
+
 	if torrentBytes == nil {
 		torrentBytes, err = fetchBytes(ctx, hc, it.Enclosure, feedCookie)
 		if err != nil {

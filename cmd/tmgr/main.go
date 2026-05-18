@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -41,7 +42,21 @@ func main() {
 	caPath := flag.String("ca", "/etc/tmgr/tls/ca.crt", "ca cert")
 	certPath := flag.String("cert", "/etc/tmgr/tls/client.crt", "client cert")
 	keyPath := flag.String("key", "/etc/tmgr/tls/client.key", "client key")
+	modeFlag := flag.String("mode", "enqueue", "pipeline mode: observe (log only), fetch (download+dedup, no POST), enqueue (full)")
 	flag.Parse()
+
+	var mode Mode
+	switch *modeFlag {
+	case "observe":
+		mode = ModeObserve
+	case "fetch":
+		mode = ModeFetch
+	case "enqueue":
+		mode = ModeEnqueue
+	default:
+		fmt.Fprintf(os.Stderr, "invalid --mode=%q (want observe|fetch|enqueue)\n", *modeFlag)
+		os.Exit(2)
+	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
@@ -114,6 +129,7 @@ func main() {
 			Movies: fc.Roots.Movies,
 		},
 		AnthropicKey: anthropicKey,
+		Mode:         mode,
 	}
 
 	if _, err := Run(context.Background(), cfg, httpC); err != nil {
