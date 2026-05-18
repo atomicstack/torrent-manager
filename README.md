@@ -39,8 +39,9 @@ idempotent: appends a `@reboot` crontab line that starts seedctl in a tmux sessi
 kubectl --kubeconfig ~/.kube/rpi-sandbox.yaml create namespace torrent-manager
 
 kubectl --kubeconfig ~/.kube/rpi-sandbox.yaml -n torrent-manager \
-  create secret generic tmgr-tracker \
-  --from-literal=TRACKER_COOKIE='<paste cookie here>'
+  create secret generic tmgr-cookies \
+  --from-literal=TRACKER_A_COOKIE='<paste cookie a>' \
+  # add more --from-literal flags for each cookie-bearing tracker
 
 kubectl --kubeconfig ~/.kube/rpi-sandbox.yaml -n torrent-manager \
   create secret generic tmgr-tls \
@@ -49,7 +50,7 @@ kubectl --kubeconfig ~/.kube/rpi-sandbox.yaml -n torrent-manager \
   --from-file=client.key=certs/client.key
 ```
 
-edit `deploy/k8s/configmap.yaml` so `seedctl_url`, `shows[]`, and `feeds[]` reflect your tracker.
+edit `deploy/k8s/configmap.yaml` so `seedctl_url`, `shows[]`, and `feeds[]` reflect your trackers. for feeds that require authentication, add `cookie_env: YOUR_ENV_VAR_NAME` and ensure that key exists in the `tmgr-cookies` secret.
 
 ### 4. (optional) migrate from rutorrent
 
@@ -59,6 +60,8 @@ scp seedbox@tiny:<path>/share/users/<seedbox-user>/settings/rss/cache/info     p
 scp seedbox@tiny:<path>/share/users/<seedbox-user>/settings/rss/cache/filters  private/
 scripts/migrate-rutorrent.py private/ > /tmp/watchlist.yaml
 # review /tmp/watchlist.yaml; passkey-bearing urls are visible — don't paste anywhere public
+# each feed entry has a commented-out cookie_env hint — uncomment and set the env var name
+# for any tracker that authenticates via a cookie rather than a passkey in the url
 # paste the rules into deploy/k8s/configmap.yaml under data.watchlist.yaml
 ```
 
