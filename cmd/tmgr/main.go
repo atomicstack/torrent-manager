@@ -24,7 +24,7 @@ type fileRoots struct {
 }
 
 type fileConfig struct {
-	SeedctlURL string `yaml:"seedctl_url"`
+	SeedctlURL string    `yaml:"seedctl_url"`
 	Roots      fileRoots `yaml:"roots"`
 	Shows      []struct {
 		Name      string `yaml:"name"`

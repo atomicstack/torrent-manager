@@ -19,9 +19,9 @@ type stubClient struct {
 	status func(string) (api.TorrentStatus, error)
 }
 
-func (s *stubClient) Ping() (string, error)                                    { return s.ping() }
-func (s *stubClient) LoadTorrent(b []byte, h, d string) (string, error)        { return s.load(b, h, d) }
-func (s *stubClient) GetStatus(h string) (api.TorrentStatus, error)            { return s.status(h) }
+func (s *stubClient) Ping() (string, error)                             { return s.ping() }
+func (s *stubClient) LoadTorrent(b []byte, h, d string) (string, error) { return s.load(b, h, d) }
+func (s *stubClient) GetStatus(h string) (api.TorrentStatus, error)     { return s.status(h) }
 
 func TestHealthz_OK(t *testing.T) {
 	h := newHandler(&stubClient{ping: func() (string, error) { return "0.9.8", nil }})
