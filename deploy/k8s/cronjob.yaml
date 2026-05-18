@@ -16,8 +16,11 @@ spec:
           restartPolicy: Never
           containers:
             - name: tmgr
-              image: ghcr.io/atomicstack/tmgr:dev   # overridden by kustomize image tag
-              imagePullPolicy: IfNotPresent
+              # local image preloaded onto every node via `make image-import`.
+              # containerd normalises `local/tmgr:latest` -> `docker.io/local/tmgr:latest`,
+              # so the ref below must match what `k3s ctr images list` shows.
+              image: docker.io/local/tmgr:latest
+              imagePullPolicy: Never
               args:
                 - --watchlist=/etc/tmgr/watchlist.yaml
                 - --ca=/etc/tmgr/tls/ca.crt

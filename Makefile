@@ -1,8 +1,10 @@
-.PHONY: help build build-tmgr build-seedctl test test-integration lint certs image push deploy deploy-seedhost clean
+.PHONY: help build build-tmgr build-seedctl test test-integration lint certs image image-local image-import push deploy deploy-seedhost clean
 
 SEEDCTL_HOST ?= tiny.example.com
 IMAGE ?= ghcr.io/atomicstack/tmgr
 TAG ?= dev
+LOCAL_IMAGE ?= local/tmgr:latest
+K3S_NODES ?= node-1.local node-2.local
 
 help: ## list targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' Makefile | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -29,11 +31,23 @@ lint: ## go vet
 certs: ## generate ca + server + client certs into ./certs (idempotent)
 	./scripts/make-certs.sh $(SEEDCTL_HOST)
 
-image: build-tmgr ## build the tmgr container image (arm64)
+image: build-tmgr ## build the tmgr container image (arm64) via docker
 	docker buildx build --platform linux/arm64 -t $(IMAGE):$(TAG) --load .
 
 push: image ## push the tmgr image
 	docker push $(IMAGE):$(TAG)
+
+image-local: ## build tmgr image to dist/tmgr-image.tar via ko (no docker required)
+	mkdir -p dist
+	KO_DOCKER_REPO=local/tmgr ko build --platform=linux/arm64 --bare \
+	  --push=false --tarball=dist/tmgr-image.tar ./cmd/tmgr
+
+image-import: image-local ## scp dist/tmgr-image.tar and import on each k3s node
+	@for h in $(K3S_NODES); do \
+	  echo "==> $$h"; \
+	  scp -q dist/tmgr-image.tar matt@$$h:/tmp/tmgr-image.tar && \
+	  ssh -t matt@$$h "sudo /usr/local/bin/k3s ctr images import /tmp/tmgr-image.tar"; \
+	done
 
 deploy: ## apply k8s manifests
 	kubectl apply -k deploy/k8s/
