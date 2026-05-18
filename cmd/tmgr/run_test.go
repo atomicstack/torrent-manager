@@ -62,8 +62,9 @@ func TestRun_HappyPath(t *testing.T) {
 	cfg := Config{
 		SeedctlURL: seedctl.URL,
 		Feeds:      []Feed{{URL: feedSrv.URL, Cookie: "pass=abc"}},
+		Roots:      Roots{TV: "/tv-root", Movies: "/movies-root"},
 		Shows: []feed.ShowRule{
-			{Name: "severance", Regex: regexp.MustCompile(`(?i)Severance.*1080p`)},
+			{Name: "severance", Regex: regexp.MustCompile(`(?i)Severance.*1080p`), Category: "tv", Directory: "severance"},
 		},
 	}
 
@@ -109,8 +110,9 @@ func TestRun_DedupSkip(t *testing.T) {
 	cfg := Config{
 		SeedctlURL: seedctl.URL,
 		Feeds:      []Feed{{URL: feedSrv.URL, Cookie: "pass=abc"}},
+		Roots:      Roots{TV: "/tv-root"},
 		Shows: []feed.ShowRule{
-			{Name: "severance", Regex: regexp.MustCompile(`(?i)Severance.*1080p`)},
+			{Name: "severance", Regex: regexp.MustCompile(`(?i)Severance.*1080p`), Category: "tv", Directory: "severance"},
 		},
 	}
 
@@ -187,8 +189,9 @@ func TestRun_PerFeedCookieIsolation(t *testing.T) {
 			{URL: cookieSrv.URL, Cookie: "tracker_a=secret"},
 			{URL: noCookieSrv.URL, Cookie: ""},
 		},
+		Roots: Roots{TV: "/tv-root"},
 		Shows: []feed.ShowRule{
-			{Name: "severance", Regex: regexp.MustCompile(`(?i)Severance.*1080p`)},
+			{Name: "severance", Regex: regexp.MustCompile(`(?i)Severance.*1080p`), Category: "tv", Directory: "severance"},
 		},
 	}
 
@@ -202,4 +205,115 @@ func TestRun_PerFeedCookieIsolation(t *testing.T) {
 	// what matters: matched=2 (one per feed), errors=0.
 	assert.Equal(t, 2, res.Matched)
 	assert.Equal(t, 0, res.Errors)
+}
+
+// TestRun_TvCategoryComputesSaveDir asserts that a tv category item with a valid
+// SxxExx title produces the correct X-Save-Directory header on the POST.
+func TestRun_TvCategoryComputesSaveDir(t *testing.T) {
+	feedXMLRaw, err := os.ReadFile("../../internal/feed/testdata/valid.xml")
+	require.NoError(t, err)
+
+	fakeTorrentBytes := []byte("fake-torrent-content")
+
+	var feedSrvURL string
+	feedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".torrent") {
+			w.Header().Set("Content-Type", "application/x-bittorrent")
+			_, _ = w.Write(fakeTorrentBytes)
+			return
+		}
+		rewritten := strings.ReplaceAll(string(feedXMLRaw),
+			"https://tracker.example/torrent/dl/",
+			feedSrvURL+"/dl/")
+		_, _ = w.Write([]byte(rewritten))
+	}))
+	defer feedSrv.Close()
+	feedSrvURL = feedSrv.URL
+
+	var capturedSaveDir string
+	seedctl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/v1/torrents/"):
+			http.Error(w, "nf", 404)
+		case r.Method == "POST" && r.URL.Path == "/v1/torrents":
+			capturedSaveDir = r.Header.Get("X-Save-Directory")
+			_, _ = w.Write([]byte(`{"info_hash":"X","added":true}`))
+		default:
+			http.Error(w, "bad", 400)
+		}
+	}))
+	defer seedctl.Close()
+
+	cfg := Config{
+		SeedctlURL: seedctl.URL,
+		Feeds:      []Feed{{URL: feedSrv.URL}},
+		Roots:      Roots{TV: "/tv-root"},
+		Shows: []feed.ShowRule{
+			{Name: "severance", Regex: regexp.MustCompile(`(?i)Severance.*1080p`), Category: "tv", Directory: "severance"},
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	res, err := Run(ctx, cfg, &http.Client{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Added)
+	assert.Equal(t, "/tv-root/severance/season2", capturedSaveDir)
+}
+
+// TestRun_MoviesCategoryUsesMoviesRoot asserts that a movies category item
+// gets the movies root as its X-Save-Directory.
+func TestRun_MoviesCategoryUsesMoviesRoot(t *testing.T) {
+	feedXMLRaw, err := os.ReadFile("../../internal/feed/testdata/valid.xml")
+	require.NoError(t, err)
+
+	fakeTorrentBytes := []byte("fake-torrent-content")
+
+	var feedSrvURL string
+	feedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".torrent") {
+			w.Header().Set("Content-Type", "application/x-bittorrent")
+			_, _ = w.Write(fakeTorrentBytes)
+			return
+		}
+		rewritten := strings.ReplaceAll(string(feedXMLRaw),
+			"https://tracker.example/torrent/dl/",
+			feedSrvURL+"/dl/")
+		_, _ = w.Write([]byte(rewritten))
+	}))
+	defer feedSrv.Close()
+	feedSrvURL = feedSrv.URL
+
+	var capturedSaveDir string
+	seedctl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/v1/torrents/"):
+			http.Error(w, "nf", 404)
+		case r.Method == "POST" && r.URL.Path == "/v1/torrents":
+			capturedSaveDir = r.Header.Get("X-Save-Directory")
+			_, _ = w.Write([]byte(`{"info_hash":"X","added":true}`))
+		default:
+			http.Error(w, "bad", 400)
+		}
+	}))
+	defer seedctl.Close()
+
+	cfg := Config{
+		SeedctlURL: seedctl.URL,
+		Feeds:      []Feed{{URL: feedSrv.URL}},
+		Roots:      Roots{TV: "/tv-root", Movies: "/movies-root"},
+		Shows: []feed.ShowRule{
+			// match the severance item but treat it as a movie for this test
+			{Name: "severance", Regex: regexp.MustCompile(`(?i)Severance.*1080p`), Category: "movies"},
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	res, err := Run(ctx, cfg, &http.Client{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Added)
+	assert.Equal(t, "/movies-root", capturedSaveDir)
 }

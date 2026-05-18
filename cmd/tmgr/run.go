@@ -9,8 +9,13 @@ import (
 	"log/slog"
 	"math/rand"
 	"net/http"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
+	"unicode"
 
+	"github.com/atomicstack/torrent-manager/internal/aiclassify"
 	"github.com/atomicstack/torrent-manager/internal/feed"
 )
 
@@ -20,11 +25,19 @@ type Feed struct {
 	Cookie string // empty = no Cookie header sent
 }
 
+// Roots holds the base filesystem paths for each media category.
+type Roots struct {
+	TV     string
+	Movies string
+}
+
 // Config holds the runtime parameters for a single Run tick.
 type Config struct {
-	SeedctlURL string
-	Feeds      []Feed
-	Shows      []feed.ShowRule
+	SeedctlURL   string
+	Feeds        []Feed
+	Shows        []feed.ShowRule
+	Roots        Roots
+	AnthropicKey string // empty = no AI fallback
 }
 
 // RunResult summarises what happened during one tick.
@@ -96,6 +109,22 @@ func processItem(ctx context.Context, cfg Config, hc *http.Client, feedCookie st
 		}
 	}
 
+	// compute save directory based on category
+	saveDir := ""
+	switch rule.Category {
+	case "tv":
+		show, season := resolveShowSeason(ctx, cfg, it.Title, rule)
+		if show != "" && season > 0 {
+			saveDir = filepath.Join(cfg.Roots.TV, show, fmt.Sprintf("season%d", season))
+		} else {
+			slog.Warn("tv_save_dir_skipped", "title", it.Title, "rule", rule.Name)
+		}
+	case "movies":
+		if cfg.Roots.Movies != "" {
+			saveDir = cfg.Roots.Movies
+		}
+	}
+
 	r.Queried++
 	exists, err := seedctlGetStatus(ctx, hc, cfg.SeedctlURL, hash)
 	if err != nil {
@@ -111,13 +140,68 @@ func processItem(ctx context.Context, cfg Config, hc *http.Client, feedCookie st
 			return fmt.Errorf("fetch torrent: %w", err)
 		}
 	}
-	if err := seedctlAdd(ctx, hc, cfg.SeedctlURL, hash, torrentBytes); err != nil {
+	if err := seedctlAdd(ctx, hc, cfg.SeedctlURL, hash, torrentBytes, saveDir); err != nil {
 		return fmt.Errorf("seedctl add: %w", err)
 	}
 	r.Added++
-	slog.Info("added", "title", it.Title, "hash", hash, "rule", rule.Name)
+	slog.Info("added", "title", it.Title, "hash", hash, "rule", rule.Name, "save_dir", saveDir)
 	return nil
 }
+
+// resolveShowSeason returns the show subdirectory name + season number for a TV item.
+// Order:
+//  1. season from regex (feed.ExtractSeason); show from rule.Directory (or normalised rule.Name)
+//  2. if regex fails AND cfg.AnthropicKey is set: try claude
+//  3. otherwise return ("", 0) — caller logs + skips dir override
+func resolveShowSeason(ctx context.Context, cfg Config, title string, rule feed.ShowRule) (string, int) {
+	show := rule.Directory
+	if show == "" {
+		show = normaliseShow(rule.Name)
+	}
+	if season, ok := feed.ExtractSeason(title); ok {
+		return show, season
+	}
+	if cfg.AnthropicKey == "" {
+		return "", 0
+	}
+	aictx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	res, err := aiclassify.New(cfg.AnthropicKey).Classify(aictx, title)
+	if err != nil {
+		slog.Warn("aiclassify_failed", "title", title, "err", err)
+		return "", 0
+	}
+	slog.Info("aiclassify_hit", "title", title, "show", res.Show, "season", res.Season)
+	// prefer the user-curated directory over claude's show name
+	if show == "" {
+		show = res.Show
+	}
+	return show, res.Season
+}
+
+// normaliseShow converts a human show name to lowercase dot-separated form.
+// Non-alphanumeric runs are collapsed to a single dot; leading/trailing dots
+// are trimmed.
+func normaliseShow(s string) string {
+	var b strings.Builder
+	inSep := true // start true so leading separators are trimmed
+	for _, r := range strings.ToLower(s) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+			inSep = false
+		} else {
+			if !inSep {
+				b.WriteByte('.')
+				inSep = true
+			}
+		}
+	}
+	result := b.String()
+	return strings.TrimRight(result, ".")
+}
+
+// normaliseShowRegexp is a compiled version for use in tests.
+var normaliseShowRegexp = regexp.MustCompile(`[^a-z0-9]+`)
 
 func fetchBytes(ctx context.Context, hc *http.Client, url, cookie string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -156,12 +240,15 @@ func seedctlGetStatus(ctx context.Context, hc *http.Client, base, hash string) (
 	}
 }
 
-func seedctlAdd(ctx context.Context, hc *http.Client, base, hash string, body []byte) error {
+func seedctlAdd(ctx context.Context, hc *http.Client, base, hash string, body []byte, saveDir string) error {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, "POST", base+"/v1/torrents", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/x-bittorrent")
 	req.Header.Set("X-Info-Hash", hash)
+	if saveDir != "" {
+		req.Header.Set("X-Save-Directory", saveDir)
+	}
 	resp, err := hc.Do(req)
 	if err != nil {
 		return err

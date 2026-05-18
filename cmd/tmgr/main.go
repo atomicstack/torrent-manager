@@ -18,11 +18,19 @@ type fileFeed struct {
 	CookieEnv string `yaml:"cookie_env,omitempty"`
 }
 
+type fileRoots struct {
+	TV     string `yaml:"tv"`
+	Movies string `yaml:"movies"`
+}
+
 type fileConfig struct {
 	SeedctlURL string `yaml:"seedctl_url"`
+	Roots      fileRoots `yaml:"roots"`
 	Shows      []struct {
-		Name  string `yaml:"name"`
-		Regex string `yaml:"regex"`
+		Name      string `yaml:"name"`
+		Regex     string `yaml:"regex"`
+		Category  string `yaml:"category,omitempty"`
+		Directory string `yaml:"directory,omitempty"`
 	} `yaml:"shows"`
 	Feeds []fileFeed `yaml:"feeds"`
 }
@@ -55,7 +63,12 @@ func main() {
 			logger.Error("bad regex", "name", s.Name, "err", err)
 			os.Exit(1)
 		}
-		shows = append(shows, feed.ShowRule{Name: s.Name, Regex: re})
+		shows = append(shows, feed.ShowRule{
+			Name:      s.Name,
+			Regex:     re,
+			Category:  s.Category,
+			Directory: s.Directory,
+		})
 	}
 
 	feeds := make([]Feed, 0, len(fc.Feeds))
@@ -79,6 +92,11 @@ func main() {
 		feeds = append(feeds, Feed{URL: ff.URL, Cookie: cookie})
 	}
 
+	anthropicKey := os.Getenv("ANTHROPIC_API_KEY")
+	if anthropicKey == "" {
+		logger.Warn("ANTHROPIC_API_KEY not set; ai title fallback disabled")
+	}
+
 	tlsCfg, err := tlsx.ClientConfig(*caPath, *certPath, *keyPath)
 	if err != nil {
 		logger.Error("tls", "err", err)
@@ -90,6 +108,11 @@ func main() {
 		SeedctlURL: fc.SeedctlURL,
 		Feeds:      feeds,
 		Shows:      shows,
+		Roots: Roots{
+			TV:     fc.Roots.TV,
+			Movies: fc.Roots.Movies,
+		},
+		AnthropicKey: anthropicKey,
 	}
 
 	if _, err := Run(context.Background(), cfg, httpC); err != nil {
