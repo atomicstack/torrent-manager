@@ -23,12 +23,9 @@ spec:
                 - --ca=/etc/tmgr/tls/ca.crt
                 - --cert=/etc/tmgr/tls/client.crt
                 - --key=/etc/tmgr/tls/client.key
-              env:
-                - name: TRACKER_COOKIE
-                  valueFrom:
-                    secretKeyRef:
-                      name: tmgr-tracker
-                      key: TRACKER_COOKIE
+              envFrom:
+                - secretRef:
+                    name: tmgr-cookies
               volumeMounts:
                 - name: watchlist
                   mountPath: /etc/tmgr

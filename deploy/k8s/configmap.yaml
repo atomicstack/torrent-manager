@@ -12,4 +12,6 @@ data:
         regex: '(?i)^Severance.*S\d+E\d+.*1080p'
 
     feeds:
-      - https://tracker.example/torrents/torrents.rss
+      - url: https://tracker-a.example/rss
+        cookie_env: TRACKER_A_COOKIE
+      - url: https://tracker-b.example/feed?passkey=REDACTED
