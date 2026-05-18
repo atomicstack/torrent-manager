@@ -8,6 +8,9 @@
 /certs/*
 !/certs/.gitignore
 
+# local sensitive data (rutorrent state with tracker passkeys, etc.)
+/private/
+
 # editor crud
 .DS_Store
 *.swp
