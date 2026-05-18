@@ -83,6 +83,7 @@ func Run(ctx context.Context, cfg Config, hc *http.Client) (RunResult, error) {
 	// startup jitter — skipped if context already has a deadline shorter than 30s
 	if dl, ok := ctx.Deadline(); !ok || time.Until(dl) > 30*time.Second {
 		jitter := time.Duration(rand.Intn(30_000)) * time.Millisecond
+		slog.Info("jitter_sleep", "ms", jitter.Milliseconds())
 		select {
 		case <-ctx.Done():
 			return r, ctx.Err()
@@ -95,14 +96,21 @@ func Run(ctx context.Context, cfg Config, hc *http.Client) (RunResult, error) {
 		if feedLabel == "" {
 			feedLabel = f.URL
 		}
-		slog.Info("feed_start", "feed", feedLabel)
+		slog.Info("feed_fetch_start", "feed", feedLabel, "cookie_present", f.Cookie != "")
+		fetchStart := time.Now()
 		items, err := feed.Fetch(ctx, f.URL, f.Cookie)
 		if err != nil {
-			slog.Error("feed_fetch", "feed", feedLabel, "err", err)
+			slog.Error("feed_fetch_error",
+				"feed", feedLabel,
+				"duration_ms", time.Since(fetchStart).Milliseconds(),
+				"err", err)
 			r.Errors++
 			continue
 		}
-		slog.Info("feed_items", "feed", feedLabel, "count", len(items))
+		slog.Info("feed_fetch_done",
+			"feed", feedLabel,
+			"items", len(items),
+			"duration_ms", time.Since(fetchStart).Milliseconds())
 		r.Items += len(items)
 		for _, it := range items {
 			rule, ok := feed.Match(it.Title, cfg.Shows)
