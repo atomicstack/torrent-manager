@@ -79,12 +79,24 @@ func TestClient_LoadTorrent_ReturnsHash(t *testing.T) {
 	f := newFakeRTorrent(t, loadOK)
 
 	c := NewClient(f.addr())
-	hash, err := c.LoadTorrent([]byte("fake-bencoded-bytes"), "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+	hash, err := c.LoadTorrent([]byte("fake-bencoded-bytes"), "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "")
 	require.NoError(t, err)
 	assert.Equal(t, "DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF", hash) // uppercased
 	require.Len(t, f.requests, 1)
 	assert.Contains(t, string(f.requests[0]), "load.raw_verbose")
 	assert.Contains(t, string(f.requests[0]), "<base64>") // bytes are base64-encoded
+}
+
+func TestClient_LoadTorrent_WithSaveDir(t *testing.T) {
+	loadOK := []byte("Content-Type: text/xml\r\n\r\n<methodResponse><params><param><value><i4>0</i4></value></param></params></methodResponse>")
+	f := newFakeRTorrent(t, loadOK)
+
+	c := NewClient(f.addr())
+	hash, err := c.LoadTorrent([]byte("fake-bencoded-bytes"), "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "/home/seedbox/t/tv/severance/season2")
+	require.NoError(t, err)
+	assert.Equal(t, "DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF", hash)
+	require.Len(t, f.requests, 1)
+	assert.Contains(t, string(f.requests[0]), "d.directory.set=/home/seedbox/t/tv/severance/season2")
 }
 
 func TestClient_GetStatus_NotFound(t *testing.T) {

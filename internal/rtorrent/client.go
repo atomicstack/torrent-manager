@@ -46,8 +46,15 @@ func (c *Client) Ping() (string, error) {
 // supplies the precomputed info hash (sha1 of the bencoded info dict) so the
 // return value identifies which torrent rtorrent now knows about; rtorrent's
 // load.raw_verbose returns 0 on success without echoing the hash.
-func (c *Client) LoadTorrent(data []byte, knownHash string) (string, error) {
-	_, err := c.call("load.raw_verbose", xmlString(""), xmlBase64(data))
+// If saveDir is non-empty, sets the torrent's download directory via
+// d.directory.set; rtorrent (and the filesystem) create intermediate
+// dirs as needed.
+func (c *Client) LoadTorrent(data []byte, knownHash, saveDir string) (string, error) {
+	args := []xmlValue{xmlString(""), xmlBase64(data)}
+	if saveDir != "" {
+		args = append(args, xmlString("d.directory.set="+saveDir))
+	}
+	_, err := c.call("load.raw_verbose", args...)
 	if err != nil {
 		return "", err
 	}
