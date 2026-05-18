@@ -69,7 +69,7 @@ func TestMatch_FirstWins(t *testing.T) {
 		{Name: "specific", Regex: regexp.MustCompile(`(?i)Severance.*1080p`)},
 		{Name: "broad", Regex: regexp.MustCompile(`(?i).*1080p.*`)},
 	}
-	rule, ok := feed.Match("Severance.S02E01.1080p.WEB-DL", shows)
+	rule, ok := feed.Match("Severance.S02E01.1080p.WEB-DL", "any-feed", shows)
 	assert.True(t, ok)
 	assert.Equal(t, "specific", rule.Name)
 }
@@ -78,6 +78,53 @@ func TestMatch_NoMatch(t *testing.T) {
 	shows := []feed.ShowRule{
 		{Name: "x", Regex: regexp.MustCompile(`(?i)WontMatch`)},
 	}
-	_, ok := feed.Match("Severance.S02E01.1080p.WEB-DL", shows)
+	_, ok := feed.Match("Severance.S02E01.1080p.WEB-DL", "any-feed", shows)
 	assert.False(t, ok)
+}
+
+// TestMatch_FeedScopedRuleSkipsOtherFeed: a rule scoped to one feed must not
+// fire on a different feed even if the regex matches.
+func TestMatch_FeedScopedRuleSkipsOtherFeed(t *testing.T) {
+	shows := []feed.ShowRule{
+		{
+			Name:  "tracker-a-only",
+			Regex: regexp.MustCompile(`(?i)last.week.tonight.*1080p`),
+			Feeds: []string{"TrackerA (TV)"},
+		},
+	}
+	_, ok := feed.Match("Last Week Tonight S13E12 1080p WEB-DL", "TrackerB (TV)", shows)
+	assert.False(t, ok, "rule scoped to TrackerA (TV) must not match an TrackerB feed item")
+
+	rule, ok2 := feed.Match("Last Week Tonight S13E12 1080p WEB-DL", "TrackerA (TV)", shows)
+	assert.True(t, ok2, "rule scoped to TrackerA (TV) must match an TrackerA feed item")
+	assert.Equal(t, "tracker-a-only", rule.Name)
+}
+
+// TestMatch_UnscopedRuleMatchesEveryFeed: a rule with no Feeds list applies
+// universally.
+func TestMatch_UnscopedRuleMatchesEveryFeed(t *testing.T) {
+	shows := []feed.ShowRule{
+		{Name: "anywhere", Regex: regexp.MustCompile(`(?i)Severance.*1080p`)},
+	}
+	_, ok1 := feed.Match("Severance.S02E01.1080p", "feed-a", shows)
+	_, ok2 := feed.Match("Severance.S02E01.1080p", "feed-b", shows)
+	assert.True(t, ok1)
+	assert.True(t, ok2)
+}
+
+// TestMatch_MultiFeedScope: a rule scoped to multiple feeds matches any of them.
+func TestMatch_MultiFeedScope(t *testing.T) {
+	shows := []feed.ShowRule{
+		{
+			Name:  "two-feeds",
+			Regex: regexp.MustCompile(`(?i)Some.Show`),
+			Feeds: []string{"feed-a", "feed-b"},
+		},
+	}
+	_, ok1 := feed.Match("Some.Show.S01E01", "feed-a", shows)
+	_, ok2 := feed.Match("Some.Show.S01E01", "feed-b", shows)
+	_, ok3 := feed.Match("Some.Show.S01E01", "feed-c", shows)
+	assert.True(t, ok1)
+	assert.True(t, ok2)
+	assert.False(t, ok3)
 }

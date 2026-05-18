@@ -29,10 +29,11 @@ type fileConfig struct {
 	SeedctlURL string    `yaml:"seedctl_url"`
 	Roots      fileRoots `yaml:"roots"`
 	Shows      []struct {
-		Name      string `yaml:"name"`
-		Regex     string `yaml:"regex"`
-		Category  string `yaml:"category,omitempty"`
-		Directory string `yaml:"directory,omitempty"`
+		Name      string   `yaml:"name"`
+		Regex     string   `yaml:"regex"`
+		Category  string   `yaml:"category,omitempty"`
+		Directory string   `yaml:"directory,omitempty"`
+		Feeds     []string `yaml:"feeds,omitempty"`
 	} `yaml:"shows"`
 	Feeds []fileFeed `yaml:"feeds"`
 }
@@ -72,6 +73,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	feedNames := make(map[string]struct{}, len(fc.Feeds))
+	for _, ff := range fc.Feeds {
+		if ff.Name != "" {
+			feedNames[ff.Name] = struct{}{}
+		}
+	}
+
 	shows := make([]feed.ShowRule, 0, len(fc.Shows))
 	for _, s := range fc.Shows {
 		re, err := regexp.Compile(s.Regex)
@@ -79,11 +87,19 @@ func main() {
 			logger.Error("bad regex", "name", s.Name, "err", err)
 			os.Exit(1)
 		}
+		for _, fn := range s.Feeds {
+			if _, ok := feedNames[fn]; !ok {
+				logger.Error("show rule references unknown feed",
+					"rule", s.Name, "feed", fn)
+				os.Exit(1)
+			}
+		}
 		shows = append(shows, feed.ShowRule{
 			Name:      s.Name,
 			Regex:     re,
 			Category:  s.Category,
 			Directory: s.Directory,
+			Feeds:     s.Feeds,
 		})
 	}
 

@@ -156,13 +156,17 @@ def main():
     # ---- extract feeds -------------------------------------------------------
     feeds_raw = info_obj.get("lst", {})
     feeds = []
-    for entry in feeds_raw.values():
+    # rssHash → feed label, so filters can be scoped back to their feed
+    hash_to_label = {}
+    for rss_hash, entry in feeds_raw.items():
         url = entry.get("url", "")
         label = entry.get("label", "")
         enabled = entry.get("enabled")
         # enabled is int in info file
         is_enabled = (enabled == 1 or enabled == "1" or enabled is True)
         feeds.append({"url": url, "label": label, "enabled": is_enabled})
+        if label:
+            hash_to_label[rss_hash] = label
 
     enabled_feeds = sorted(
         [f for f in feeds if f["enabled"]], key=lambda f: f["url"]
@@ -182,11 +186,14 @@ def main():
         is_enabled = not (
             enabled_val == "0" or enabled_val == 0 or enabled_val is False
         )
+        rss_hash = entry.get("rssHash", "")
+        feed_label = hash_to_label.get(rss_hash, "")
         shows.append({
             "name": name.strip(),
             "pattern": pattern,
             "exclude": exclude,
             "enabled": is_enabled,
+            "feed": feed_label,
         })
 
     shows_sorted = sorted(shows, key=lambda s: s["name"].lower())
@@ -206,9 +213,13 @@ def main():
         name_q = yaml_str(show["name"])
         pat_q = yaml_str(translated)
 
+        feed_list = f"[{yaml_str(show['feed'])}]" if show["feed"] else ""
+
         if show["enabled"]:
             lines.append(f"  - name: {name_q}")
             lines.append(f"    regex: {pat_q}")
+            if feed_list:
+                lines.append(f"    feeds: {feed_list}")
             if show["exclude"]:
                 excl_q = yaml_str(show["exclude"])
                 lines.append(f"    # exclude in rutorrent (NOT applied): {excl_q}")
@@ -216,6 +227,8 @@ def main():
             # disabled: emit as comment block
             lines.append(f"  # - name: {name_q}  # disabled in rutorrent")
             lines.append(f"  #   regex: {pat_q}")
+            if feed_list:
+                lines.append(f"  #   feeds: {feed_list}")
             if show["exclude"]:
                 excl_q = yaml_str(show["exclude"])
                 lines.append(f"  #   # exclude in rutorrent (NOT applied): {excl_q}")

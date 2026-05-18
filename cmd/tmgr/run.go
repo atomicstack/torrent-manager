@@ -113,7 +113,7 @@ func Run(ctx context.Context, cfg Config, hc *http.Client) (RunResult, error) {
 			"duration_ms", time.Since(fetchStart).Milliseconds())
 		r.Items += len(items)
 		for _, it := range items {
-			rule, ok := feed.Match(it.Title, cfg.Shows)
+			rule, ok := feed.Match(it.Title, feedLabel, cfg.Shows)
 			if !ok {
 				slog.Debug("item_no_match", "feed", feedLabel, "title", it.Title)
 				continue

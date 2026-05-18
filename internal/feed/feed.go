@@ -24,8 +24,9 @@ type Item struct {
 type ShowRule struct {
 	Name      string // human label only — not used in matching
 	Regex     *regexp.Regexp
-	Category  string // optional: "tv" | "movies"
-	Directory string // optional: explicit show subdir name (lowercase, dot-separated)
+	Category  string   // optional: "tv" | "movies"
+	Directory string   // optional: explicit show subdir name (lowercase, dot-separated)
+	Feeds     []string // optional: only match when current feed.Name ∈ Feeds. nil/empty = match every feed
 }
 
 // Fetch GETs the feed URL with an optional cookie header and returns the
@@ -66,13 +67,30 @@ func Fetch(ctx context.Context, url, cookie string) ([]Item, error) {
 	return out, nil
 }
 
-// Match returns the first ShowRule whose regex matches title. Order matters:
-// callers should list more specific rules first.
-func Match(title string, rules []ShowRule) (ShowRule, bool) {
+// Match returns the first ShowRule whose regex matches title AND whose feed
+// scope (if any) includes feedName. A rule with empty/nil Feeds applies to
+// every feed; otherwise the current feed name must appear in the list (exact,
+// case-sensitive). Order matters: callers should list more specific rules first.
+func Match(title, feedName string, rules []ShowRule) (ShowRule, bool) {
 	for _, r := range rules {
+		if !ruleAppliesToFeed(r, feedName) {
+			continue
+		}
 		if r.Regex.MatchString(title) {
 			return r, true
 		}
 	}
 	return ShowRule{}, false
+}
+
+func ruleAppliesToFeed(r ShowRule, feedName string) bool {
+	if len(r.Feeds) == 0 {
+		return true
+	}
+	for _, f := range r.Feeds {
+		if f == feedName {
+			return true
+		}
+	}
+	return false
 }
