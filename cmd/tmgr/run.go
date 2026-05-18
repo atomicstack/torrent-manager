@@ -82,13 +82,15 @@ func extractTitle(re *regexp.Regexp, raw string) string {
 
 // RunResult summarises what happened during one tick.
 type RunResult struct {
-	Feeds   int
-	Items   int
-	Matched int
-	Queried int
-	Skipped int // matched-but-not-added because seedctl already has the hash
-	Added   int
-	Errors  int
+	Feeds    int
+	Items    int
+	Matched  int
+	Queried  int
+	Skipped  int // matched-but-not-added because seedctl already has the hash
+	Added    int
+	Errors   int
+	AICalls  int // # of Claude API invocations made to recover the season number
+	AIErrors int // subset of AICalls that returned an error
 }
 
 // Run executes one tick: poll every feed, match items, ask seedctl, and post
@@ -155,7 +157,8 @@ func Run(ctx context.Context, cfg Config, hc *http.Client) (RunResult, error) {
 	slog.Info("run_summary",
 		"mode", string(mode),
 		"feeds", r.Feeds, "items", r.Items, "matched", r.Matched,
-		"queried", r.Queried, "skipped", r.Skipped, "added", r.Added, "errors", r.Errors)
+		"queried", r.Queried, "skipped", r.Skipped, "added", r.Added,
+		"ai_calls", r.AICalls, "ai_errors", r.AIErrors, "errors", r.Errors)
 	return r, nil
 }
 
@@ -196,7 +199,7 @@ func processItem(ctx context.Context, cfg Config, hc *http.Client, feedCookie st
 			slog.Warn("tv_save_dir_skipped_no_root", "title", it.Title, "rule", rule.Name)
 			break
 		}
-		show, season := resolveShowSeason(ctx, cfg, it.Title, rule)
+		show, season := resolveShowSeason(ctx, cfg, it.Title, rule, r)
 		if show != "" && season > 0 {
 			saveDir = filepath.Join(cfg.Roots.TV, show, fmt.Sprintf("season%d", season))
 		} else {
@@ -280,9 +283,9 @@ func logTorrentInspect(title string, b []byte) {
 // resolveShowSeason returns the show subdirectory name + season number for a TV item.
 // Order:
 //  1. season from regex (feed.ExtractSeason); show from rule.Directory (or normalised rule.Name)
-//  2. if regex fails AND cfg.AnthropicKey is set: try claude
+//  2. if regex fails AND cfg.AnthropicKey is set: try claude (records timing + counters on r)
 //  3. otherwise return ("", 0) — caller logs + skips dir override
-func resolveShowSeason(ctx context.Context, cfg Config, title string, rule feed.ShowRule) (string, int) {
+func resolveShowSeason(ctx context.Context, cfg Config, title string, rule feed.ShowRule, r *RunResult) (string, int) {
 	show := rule.Directory
 	if show == "" {
 		show = normaliseShow(rule.Name)
@@ -293,14 +296,25 @@ func resolveShowSeason(ctx context.Context, cfg Config, title string, rule feed.
 	if cfg.AnthropicKey == "" {
 		return "", 0
 	}
+	slog.Info("aiclassify_start", "title", title, "rule", rule.Name)
+	aiStart := time.Now()
 	aictx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	res, err := aiclassify.New(cfg.AnthropicKey).Classify(aictx, title)
+	aiDuration := time.Since(aiStart)
+	r.AICalls++
 	if err != nil {
-		slog.Warn("aiclassify_failed", "title", title, "err", err)
+		r.AIErrors++
+		slog.Warn("aiclassify_failed",
+			"title", title, "rule", rule.Name,
+			"duration_ms", aiDuration.Milliseconds(),
+			"err", err)
 		return "", 0
 	}
-	slog.Info("aiclassify_hit", "title", title, "show", res.Show, "season", res.Season)
+	slog.Info("aiclassify_hit",
+		"title", title, "rule", rule.Name,
+		"duration_ms", aiDuration.Milliseconds(),
+		"show", res.Show, "season", res.Season)
 	// prefer the user-curated directory over claude's show name
 	if show == "" {
 		show = res.Show
