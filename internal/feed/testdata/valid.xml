@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>tracker feed</title>
+    <item>
+      <title>Severance.S02E01.1080p.WEB-DL.DDP5.1.H.264-GROUP</title>
+      <guid>https://tracker.example/torrent/aabbccddeeff00112233445566778899aabbccdd</guid>
+      <link>https://tracker.example/torrent/aabbccddeeff00112233445566778899aabbccdd</link>
+      <enclosure url="https://tracker.example/torrent/dl/aabbccddeeff00112233445566778899aabbccdd.torrent" type="application/x-bittorrent"/>
+    </item>
+    <item>
+      <title>Some.Other.Show.S05E12.720p.HDTV</title>
+      <guid>https://tracker.example/torrent/11112222333344445555666677778888aaaaaaaa</guid>
+      <enclosure url="https://tracker.example/torrent/dl/11112222333344445555666677778888aaaaaaaa.torrent" type="application/x-bittorrent"/>
+    </item>
+  </channel>
+</rss>
