@@ -1,6 +1,8 @@
 # build artefacts
 /dist/
 /bin/
+/seedctl
+/tmgr
 
 # secrets, certs (NEVER commit private keys)
 /certs/*

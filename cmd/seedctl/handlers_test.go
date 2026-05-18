@@ -1,0 +1,105 @@
+package main
+
+import (
+	"errors"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/atomicstack/torrent-manager/internal/api"
+	"github.com/atomicstack/torrent-manager/internal/rtorrent"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// stubClient implements the subset of rtorrent.Client used by handlers.
+type stubClient struct {
+	ping   func() (string, error)
+	load   func([]byte, string) (string, error)
+	status func(string) (api.TorrentStatus, error)
+}
+
+func (s *stubClient) Ping() (string, error)                          { return s.ping() }
+func (s *stubClient) LoadTorrent(b []byte, h string) (string, error) { return s.load(b, h) }
+func (s *stubClient) GetStatus(h string) (api.TorrentStatus, error)  { return s.status(h) }
+
+func TestHealthz_OK(t *testing.T) {
+	h := newHandler(&stubClient{ping: func() (string, error) { return "0.9.8", nil }})
+	req := httptest.NewRequest("GET", "/healthz", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	assert.Equal(t, 200, w.Code)
+	assert.Contains(t, w.Body.String(), `"ok":true`)
+	assert.Contains(t, w.Body.String(), `"rtorrent_version":"0.9.8"`)
+}
+
+func TestHealthz_RTorrentDown(t *testing.T) {
+	h := newHandler(&stubClient{ping: func() (string, error) { return "", errors.New("connection refused") }})
+	req := httptest.NewRequest("GET", "/healthz", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	assert.Equal(t, 503, w.Code)
+}
+
+func TestGetTorrent_NotFound(t *testing.T) {
+	h := newHandler(&stubClient{status: func(string) (api.TorrentStatus, error) {
+		return api.TorrentStatus{}, rtorrent.ErrNotFound
+	}})
+	req := httptest.NewRequest("GET", "/v1/torrents/AAAA000000000000000000000000000000000000", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	assert.Equal(t, 404, w.Code)
+}
+
+func TestGetTorrent_Found(t *testing.T) {
+	h := newHandler(&stubClient{status: func(string) (api.TorrentStatus, error) {
+		return api.TorrentStatus{InfoHash: "AAA", Name: "X", Complete: true}, nil
+	}})
+	req := httptest.NewRequest("GET", "/v1/torrents/AAA", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	assert.Equal(t, 200, w.Code)
+	assert.Contains(t, w.Body.String(), `"name":"X"`)
+	assert.Contains(t, w.Body.String(), `"complete":true`)
+}
+
+func TestPostTorrent_Adds(t *testing.T) {
+	called := false
+	h := newHandler(&stubClient{
+		load: func(b []byte, _ string) (string, error) {
+			called = true
+			assert.Equal(t, "fake-bytes", string(b))
+			return "DEADBEEF" + strings.Repeat("0", 32), nil
+		},
+		status: func(string) (api.TorrentStatus, error) {
+			return api.TorrentStatus{}, rtorrent.ErrNotFound
+		},
+	})
+	req := httptest.NewRequest("POST", "/v1/torrents", strings.NewReader("fake-bytes"))
+	req.Header.Set("Content-Type", "application/x-bittorrent")
+	req.Header.Set("X-Info-Hash", "DEADBEEF"+strings.Repeat("0", 32))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	require.Equal(t, 200, w.Code)
+	assert.True(t, called)
+	assert.Contains(t, w.Body.String(), `"added":true`)
+}
+
+func TestPostTorrent_Duplicate(t *testing.T) {
+	h := newHandler(&stubClient{
+		// status returns existing torrent → handler short-circuits without calling load
+		status: func(string) (api.TorrentStatus, error) {
+			return api.TorrentStatus{InfoHash: "DEADBEEF" + strings.Repeat("0", 32), Name: "x"}, nil
+		},
+		load: func([]byte, string) (string, error) {
+			t.Fatalf("load should not be called for duplicates")
+			return "", nil
+		},
+	})
+	req := httptest.NewRequest("POST", "/v1/torrents", strings.NewReader("ignored"))
+	req.Header.Set("X-Info-Hash", "DEADBEEF"+strings.Repeat("0", 32))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	require.Equal(t, 200, w.Code)
+	assert.Contains(t, w.Body.String(), `"added":false`)
+}
