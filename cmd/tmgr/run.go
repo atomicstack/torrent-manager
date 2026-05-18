@@ -17,6 +17,7 @@ import (
 
 	"github.com/atomicstack/torrent-manager/internal/aiclassify"
 	"github.com/atomicstack/torrent-manager/internal/feed"
+	"github.com/atomicstack/torrent-manager/internal/torrent"
 )
 
 // Feed holds the URL and optional cookie for a single RSS feed.
@@ -183,6 +184,7 @@ func processItem(ctx context.Context, cfg Config, hc *http.Client, feedCookie st
 			return fmt.Errorf("compute hash: %w", err)
 		}
 		slog.Info("torrent_fetched_and_hashed", "title", it.Title, "hash", hash, "bytes", len(torrentBytes))
+		logTorrentInspect(it.Title, torrentBytes)
 	}
 
 	// compute save directory based on category
@@ -216,6 +218,18 @@ func processItem(ctx context.Context, cfg Config, hc *http.Client, feedCookie st
 		return nil
 	}
 
+	// not a dedup hit. fetch torrent bytes if we haven't already (hashFromFeed=true
+	// path skipped the initial download). inspect-logging happens here so the user
+	// can see what's about to be queued — applies to fetch AND enqueue modes.
+	if torrentBytes == nil {
+		torrentBytes, err = fetchBytes(ctx, hc, it.Enclosure, feedCookie)
+		if err != nil {
+			return fmt.Errorf("fetch torrent: %w", err)
+		}
+		slog.Info("torrent_fetched", "title", it.Title, "hash", hash, "bytes", len(torrentBytes))
+		logTorrentInspect(it.Title, torrentBytes)
+	}
+
 	// fetch mode: stop short of POSTing.
 	if mode == ModeFetch {
 		slog.Info("fetch_mode_skip_enqueue",
@@ -223,18 +237,29 @@ func processItem(ctx context.Context, cfg Config, hc *http.Client, feedCookie st
 		return nil
 	}
 
-	if torrentBytes == nil {
-		torrentBytes, err = fetchBytes(ctx, hc, it.Enclosure, feedCookie)
-		if err != nil {
-			return fmt.Errorf("fetch torrent: %w", err)
-		}
-	}
 	if err := seedctlAdd(ctx, hc, cfg.SeedctlURL, hash, torrentBytes, saveDir); err != nil {
 		return fmt.Errorf("seedctl add: %w", err)
 	}
 	r.Added++
 	slog.Info("added", "title", it.Title, "hash", hash, "rule", rule.Name, "save_dir", saveDir)
 	return nil
+}
+
+// logTorrentInspect parses the torrent payload and emits an INFO log with
+// file_count, total_bytes, total_human, and roots. Failures are logged at WARN
+// and never abort the run.
+func logTorrentInspect(title string, b []byte) {
+	md, err := torrent.Parse(b)
+	if err != nil {
+		slog.Warn("torrent_inspect_failed", "title", title, "err", err)
+		return
+	}
+	slog.Info("torrent_inspect",
+		"title", title,
+		"file_count", md.FileCount,
+		"total_bytes", md.TotalBytes,
+		"total_human", torrent.HumanBytes(md.TotalBytes),
+		"roots", md.Roots)
 }
 
 // resolveShowSeason returns the show subdirectory name + season number for a TV item.
