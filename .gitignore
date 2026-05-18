@@ -16,6 +16,7 @@
 *.swp
 .vscode/
 .idea/
+*.log
 
 # go test detritus
 *.test
