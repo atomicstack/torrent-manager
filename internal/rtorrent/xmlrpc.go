@@ -8,6 +8,9 @@ import (
 	"strings"
 )
 
+// xmlValue is one positional XML-RPC parameter. Body is interpolated raw into
+// the output XML; constructors (xmlString, xmlInt, xmlBase64) are responsible
+// for any escaping or encoding needed to make Body XML-safe.
 type xmlValue struct {
 	Tag  string
 	Body string
@@ -29,7 +32,7 @@ func encodeXMLRPCCall(method string, args ...xmlValue) string {
 	var b strings.Builder
 	b.WriteString(`<?xml version="1.0"?>`)
 	b.WriteString("<methodCall><methodName>")
-	b.WriteString(method)
+	b.WriteString(xmlEscape(method))
 	b.WriteString("</methodName><params>")
 	for _, a := range args {
 		b.WriteString("<param><value><")
@@ -48,7 +51,10 @@ func encodeXMLRPCCall(method string, args ...xmlValue) string {
 // representation of whatever scalar type was returned). Returns an error
 // wrapping faultCode + faultString on a <fault> response.
 func decodeXMLRPCResponse(raw []byte) (string, error) {
-	// strip http-style headers ("Content-Type: ...\r\n\r\n") if present
+	// strip http-style headers ("Content-Type: ...\r\n\r\n") if present.
+	// rtorrent's SCGI daemon always uses CRLF line endings; LF-only headers
+	// are not handled — a malformed response would surface as a parse error
+	// from xml.Unmarshal below, which is acceptable.
 	if i := bytes.Index(raw, []byte("\r\n\r\n")); i >= 0 {
 		raw = raw[i+4:]
 	}

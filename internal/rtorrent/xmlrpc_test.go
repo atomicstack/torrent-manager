@@ -27,6 +27,13 @@ func TestXMLRPCDecode_StringResponse(t *testing.T) {
 	assert.Equal(t, "0.9.8", v)
 }
 
+func TestXMLRPCDecode_I4Response(t *testing.T) {
+	resp := []byte("Content-Type: text/xml\r\n\r\n<methodResponse><params><param><value><i4>1</i4></value></param></params></methodResponse>")
+	v, err := decodeXMLRPCResponse(resp)
+	require.NoError(t, err)
+	assert.Equal(t, "1", v)
+}
+
 func TestXMLRPCDecode_FaultResponse(t *testing.T) {
 	resp := []byte("Content-Type: text/xml\r\n\r\n<methodResponse><fault><value><struct><member><name>faultCode</name><value><i4>-501</i4></value></member><member><name>faultString</name><value><string>Could not create download</string></value></member></struct></value></fault></methodResponse>")
 	_, err := decodeXMLRPCResponse(resp)
