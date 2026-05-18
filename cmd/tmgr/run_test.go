@@ -60,9 +60,8 @@ func TestRun_HappyPath(t *testing.T) {
 	defer seedctl.Close()
 
 	cfg := Config{
-		SeedctlURL:    seedctl.URL,
-		TrackerCookie: "pass=abc",
-		Feeds:         []string{feedSrv.URL},
+		SeedctlURL: seedctl.URL,
+		Feeds:      []Feed{{URL: feedSrv.URL, Cookie: "pass=abc"}},
 		Shows: []feed.ShowRule{
 			{Name: "severance", Regex: regexp.MustCompile(`(?i)Severance.*1080p`)},
 		},
@@ -108,9 +107,8 @@ func TestRun_DedupSkip(t *testing.T) {
 	defer seedctl.Close()
 
 	cfg := Config{
-		SeedctlURL:    seedctl.URL,
-		TrackerCookie: "pass=abc",
-		Feeds:         []string{feedSrv.URL},
+		SeedctlURL: seedctl.URL,
+		Feeds:      []Feed{{URL: feedSrv.URL, Cookie: "pass=abc"}},
 		Shows: []feed.ShowRule{
 			{Name: "severance", Regex: regexp.MustCompile(`(?i)Severance.*1080p`)},
 		},
@@ -124,4 +122,84 @@ func TestRun_DedupSkip(t *testing.T) {
 	assert.Equal(t, 1, res.Matched)
 	assert.Equal(t, 0, res.Added) // dedup skipped the add
 	assert.Len(t, posted, 0)      // no POST made
+}
+
+// TestRun_PerFeedCookieIsolation verifies that when two feeds are configured,
+// only the feed with a cookie sends a Cookie header. the feed without a cookie
+// must NOT send any Cookie header.
+func TestRun_PerFeedCookieIsolation(t *testing.T) {
+	feedXMLRaw, err := os.ReadFile("../../internal/feed/testdata/valid.xml")
+	require.NoError(t, err)
+
+	fakeTorrentBytes := []byte("fake-torrent-content")
+
+	// cookieSrv: expects the Cookie header to be present.
+	var cookieSrvURL string
+	cookieSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "tracker_a=secret", r.Header.Get("Cookie"),
+			"cookie feed should always send its cookie")
+		if strings.HasSuffix(r.URL.Path, ".torrent") {
+			w.Header().Set("Content-Type", "application/x-bittorrent")
+			_, _ = w.Write(fakeTorrentBytes)
+			return
+		}
+		rewritten := strings.ReplaceAll(string(feedXMLRaw),
+			"https://tracker.example/torrent/dl/",
+			cookieSrvURL+"/dl/")
+		_, _ = w.Write([]byte(rewritten))
+	}))
+	defer cookieSrv.Close()
+	cookieSrvURL = cookieSrv.URL
+
+	// noCookieSrv: must NOT receive any Cookie header.
+	var noCookieSrvURL string
+	noCookieSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Empty(t, r.Header.Get("Cookie"),
+			"no-cookie feed must not send a Cookie header")
+		if strings.HasSuffix(r.URL.Path, ".torrent") {
+			w.Header().Set("Content-Type", "application/x-bittorrent")
+			_, _ = w.Write(fakeTorrentBytes)
+			return
+		}
+		rewritten := strings.ReplaceAll(string(feedXMLRaw),
+			"https://tracker.example/torrent/dl/",
+			noCookieSrvURL+"/dl/")
+		_, _ = w.Write([]byte(rewritten))
+	}))
+	defer noCookieSrv.Close()
+	noCookieSrvURL = noCookieSrv.URL
+
+	seedctl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/v1/torrents/"):
+			http.Error(w, "nf", 404)
+		case r.Method == "POST" && r.URL.Path == "/v1/torrents":
+			_, _ = w.Write([]byte(`{"info_hash":"X","added":true}`))
+		default:
+			http.Error(w, "bad", 400)
+		}
+	}))
+	defer seedctl.Close()
+
+	cfg := Config{
+		SeedctlURL: seedctl.URL,
+		Feeds: []Feed{
+			{URL: cookieSrv.URL, Cookie: "tracker_a=secret"},
+			{URL: noCookieSrv.URL, Cookie: ""},
+		},
+		Shows: []feed.ShowRule{
+			{Name: "severance", Regex: regexp.MustCompile(`(?i)Severance.*1080p`)},
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	res, err := Run(ctx, cfg, &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}})
+	require.NoError(t, err)
+	// both feeds match one item each, but they share the same hash → second feed's item
+	// will be deduped by seedctl returning 200 on second query OR both get added.
+	// what matters: matched=2 (one per feed), errors=0.
+	assert.Equal(t, 2, res.Matched)
+	assert.Equal(t, 0, res.Errors)
 }

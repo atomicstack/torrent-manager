@@ -14,12 +14,17 @@ import (
 	"github.com/atomicstack/torrent-manager/internal/feed"
 )
 
+// Feed holds the URL and optional cookie for a single RSS feed.
+type Feed struct {
+	URL    string
+	Cookie string // empty = no Cookie header sent
+}
+
 // Config holds the runtime parameters for a single Run tick.
 type Config struct {
-	SeedctlURL    string
-	TrackerCookie string
-	Feeds         []string
-	Shows         []feed.ShowRule
+	SeedctlURL string
+	Feeds      []Feed
+	Shows      []feed.ShowRule
 }
 
 // RunResult summarises what happened during one tick.
@@ -50,10 +55,10 @@ func Run(ctx context.Context, cfg Config, hc *http.Client) (RunResult, error) {
 		}
 	}
 
-	for _, url := range cfg.Feeds {
-		items, err := feed.Fetch(ctx, url, cfg.TrackerCookie)
+	for _, f := range cfg.Feeds {
+		items, err := feed.Fetch(ctx, f.URL, f.Cookie)
 		if err != nil {
-			slog.Error("feed_fetch", "feed", url, "err", err)
+			slog.Error("feed_fetch", "feed", f.URL, "err", err)
 			r.Errors++
 			continue
 		}
@@ -64,7 +69,7 @@ func Run(ctx context.Context, cfg Config, hc *http.Client) (RunResult, error) {
 				continue
 			}
 			r.Matched++
-			if err := processItem(ctx, cfg, hc, it, rule, &r); err != nil {
+			if err := processItem(ctx, cfg, hc, f.Cookie, it, rule, &r); err != nil {
 				slog.Error("process_item", "title", it.Title, "err", err)
 				r.Errors++
 			}
@@ -76,12 +81,12 @@ func Run(ctx context.Context, cfg Config, hc *http.Client) (RunResult, error) {
 	return r, nil
 }
 
-func processItem(ctx context.Context, cfg Config, hc *http.Client, it feed.Item, rule feed.ShowRule, r *RunResult) error {
+func processItem(ctx context.Context, cfg Config, hc *http.Client, feedCookie string, it feed.Item, rule feed.ShowRule, r *RunResult) error {
 	hash, ok := feed.ExtractHash(it)
 	var torrentBytes []byte
 	if !ok {
 		var err error
-		torrentBytes, err = fetchBytes(ctx, hc, it.Enclosure, cfg.TrackerCookie)
+		torrentBytes, err = fetchBytes(ctx, hc, it.Enclosure, feedCookie)
 		if err != nil {
 			return fmt.Errorf("fetch torrent: %w", err)
 		}
@@ -101,7 +106,7 @@ func processItem(ctx context.Context, cfg Config, hc *http.Client, it feed.Item,
 		return nil
 	}
 	if torrentBytes == nil {
-		torrentBytes, err = fetchBytes(ctx, hc, it.Enclosure, cfg.TrackerCookie)
+		torrentBytes, err = fetchBytes(ctx, hc, it.Enclosure, feedCookie)
 		if err != nil {
 			return fmt.Errorf("fetch torrent: %w", err)
 		}
