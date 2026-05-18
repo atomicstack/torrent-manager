@@ -22,6 +22,8 @@ data:
         # no directory needed for movies
 
     feeds:
-      - url: https://tracker-a.example/rss
+      - name: tracker-a
+        url: https://tracker-a.example/rss
         cookie_env: TRACKER_A_COOKIE
-      - url: https://tracker-b.example/feed?passkey=REDACTED
+      - name: tracker-b
+        url: https://tracker-b.example/feed?passkey=REDACTED

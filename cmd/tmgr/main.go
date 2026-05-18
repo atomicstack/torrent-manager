@@ -14,6 +14,7 @@ import (
 )
 
 type fileFeed struct {
+	Name      string `yaml:"name,omitempty"`
 	URL       string `yaml:"url"`
 	CookieEnv string `yaml:"cookie_env,omitempty"`
 }
@@ -89,7 +90,7 @@ func main() {
 				}
 			}
 		}
-		feeds = append(feeds, Feed{URL: ff.URL, Cookie: cookie})
+		feeds = append(feeds, Feed{Name: ff.Name, URL: ff.URL, Cookie: cookie})
 	}
 
 	anthropicKey := os.Getenv("ANTHROPIC_API_KEY")

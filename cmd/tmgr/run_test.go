@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -61,7 +63,7 @@ func TestRun_HappyPath(t *testing.T) {
 
 	cfg := Config{
 		SeedctlURL: seedctl.URL,
-		Feeds:      []Feed{{URL: feedSrv.URL, Cookie: "pass=abc"}},
+		Feeds:      []Feed{{Name: "test-feed-a", URL: feedSrv.URL, Cookie: "pass=abc"}},
 		Roots:      Roots{TV: "/tv-root", Movies: "/movies-root"},
 		Shows: []feed.ShowRule{
 			{Name: "severance", Regex: regexp.MustCompile(`(?i)Severance.*1080p`), Category: "tv", Directory: "severance"},
@@ -109,7 +111,7 @@ func TestRun_DedupSkip(t *testing.T) {
 
 	cfg := Config{
 		SeedctlURL: seedctl.URL,
-		Feeds:      []Feed{{URL: feedSrv.URL, Cookie: "pass=abc"}},
+		Feeds:      []Feed{{Name: "test-feed-a", URL: feedSrv.URL, Cookie: "pass=abc"}},
 		Roots:      Roots{TV: "/tv-root"},
 		Shows: []feed.ShowRule{
 			{Name: "severance", Regex: regexp.MustCompile(`(?i)Severance.*1080p`), Category: "tv", Directory: "severance"},
@@ -186,8 +188,8 @@ func TestRun_PerFeedCookieIsolation(t *testing.T) {
 	cfg := Config{
 		SeedctlURL: seedctl.URL,
 		Feeds: []Feed{
-			{URL: cookieSrv.URL, Cookie: "tracker_a=secret"},
-			{URL: noCookieSrv.URL, Cookie: ""},
+			{Name: "test-feed-a", URL: cookieSrv.URL, Cookie: "tracker_a=secret"},
+			{Name: "test-feed-b", URL: noCookieSrv.URL, Cookie: ""},
 		},
 		Roots: Roots{TV: "/tv-root"},
 		Shows: []feed.ShowRule{
@@ -246,7 +248,7 @@ func TestRun_TvCategoryComputesSaveDir(t *testing.T) {
 
 	cfg := Config{
 		SeedctlURL: seedctl.URL,
-		Feeds:      []Feed{{URL: feedSrv.URL}},
+		Feeds:      []Feed{{Name: "test-feed-a", URL: feedSrv.URL}},
 		Roots:      Roots{TV: "/tv-root"},
 		Shows: []feed.ShowRule{
 			{Name: "severance", Regex: regexp.MustCompile(`(?i)Severance.*1080p`), Category: "tv", Directory: "severance"},
@@ -301,7 +303,7 @@ func TestRun_MoviesCategoryUsesMoviesRoot(t *testing.T) {
 
 	cfg := Config{
 		SeedctlURL: seedctl.URL,
-		Feeds:      []Feed{{URL: feedSrv.URL}},
+		Feeds:      []Feed{{Name: "test-feed-a", URL: feedSrv.URL}},
 		Roots:      Roots{TV: "/tv-root", Movies: "/movies-root"},
 		Shows: []feed.ShowRule{
 			// match the severance item but treat it as a movie for this test
@@ -316,4 +318,38 @@ func TestRun_MoviesCategoryUsesMoviesRoot(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.Added)
 	assert.Equal(t, "/movies-root", capturedSaveDir)
+}
+
+// TestRun_FeedLogsUseName verifies that when a named feed fails to fetch,
+// the error log record carries the feed's Name rather than the raw URL.
+func TestRun_FeedLogsUseName(t *testing.T) {
+	// feed server always returns 500 so feed.Fetch fails
+	feedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	}))
+	defer feedSrv.Close()
+
+	// capture slog output into a buffer
+	var buf bytes.Buffer
+	handler := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError})
+	orig := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+
+	cfg := Config{
+		SeedctlURL: "http://127.0.0.1:1", // unreachable; never reached
+		Feeds:      []Feed{{Name: "my-named-feed", URL: feedSrv.URL}},
+		Shows:      []feed.ShowRule{},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	res, err := Run(ctx, cfg, &http.Client{})
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Errors)
+
+	logged := buf.String()
+	assert.Contains(t, logged, "my-named-feed", "error log should contain the feed name")
+	assert.NotContains(t, logged, feedSrv.URL, "error log should not contain the raw URL when a name is set")
 }

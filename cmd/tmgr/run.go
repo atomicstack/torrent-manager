@@ -20,6 +20,7 @@ import (
 
 // Feed holds the URL and optional cookie for a single RSS feed.
 type Feed struct {
+	Name   string // human-readable label; falls back to URL in logs if empty
 	URL    string
 	Cookie string // empty = no Cookie header sent
 }
@@ -68,9 +69,13 @@ func Run(ctx context.Context, cfg Config, hc *http.Client) (RunResult, error) {
 	}
 
 	for _, f := range cfg.Feeds {
+		feedLabel := f.Name
+		if feedLabel == "" {
+			feedLabel = f.URL
+		}
 		items, err := feed.Fetch(ctx, f.URL, f.Cookie)
 		if err != nil {
-			slog.Error("feed_fetch", "feed", f.URL, "err", err)
+			slog.Error("feed_fetch", "feed", feedLabel, "err", err)
 			r.Errors++
 			continue
 		}
