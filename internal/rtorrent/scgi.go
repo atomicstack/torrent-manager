@@ -43,7 +43,9 @@ func dialSCGI(addr string, body []byte) ([]byte, error) {
 		return nil, fmt.Errorf("dial scgi: %w", err)
 	}
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		return nil, fmt.Errorf("set deadline scgi: %w", err)
+	}
 
 	framed, err := encodeSCGI(body)
 	if err != nil {
@@ -52,5 +54,9 @@ func dialSCGI(addr string, body []byte) ([]byte, error) {
 	if _, err := conn.Write(framed); err != nil {
 		return nil, fmt.Errorf("write scgi: %w", err)
 	}
-	return io.ReadAll(conn)
+	resp, err := io.ReadAll(conn)
+	if err != nil {
+		return nil, fmt.Errorf("read scgi: %w", err)
+	}
+	return resp, nil
 }
