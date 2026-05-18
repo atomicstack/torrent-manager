@@ -10,7 +10,6 @@ import (
 	"math/rand"
 	"net/http"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -113,6 +112,10 @@ func processItem(ctx context.Context, cfg Config, hc *http.Client, feedCookie st
 	saveDir := ""
 	switch rule.Category {
 	case "tv":
+		if cfg.Roots.TV == "" {
+			slog.Warn("tv_save_dir_skipped_no_root", "title", it.Title, "rule", rule.Name)
+			break
+		}
 		show, season := resolveShowSeason(ctx, cfg, it.Title, rule)
 		if show != "" && season > 0 {
 			saveDir = filepath.Join(cfg.Roots.TV, show, fmt.Sprintf("season%d", season))
@@ -199,9 +202,6 @@ func normaliseShow(s string) string {
 	result := b.String()
 	return strings.TrimRight(result, ".")
 }
-
-// normaliseShowRegexp is a compiled version for use in tests.
-var normaliseShowRegexp = regexp.MustCompile(`[^a-z0-9]+`)
 
 func fetchBytes(ctx context.Context, hc *http.Client, url, cookie string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
