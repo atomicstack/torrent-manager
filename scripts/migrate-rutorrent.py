@@ -226,14 +226,16 @@ def main():
     for feed in enabled_feeds:
         label = feed["label"]
         url = feed["url"]
-        comment = f"  # {label}" if label else ""
-        lines.append(f"  - {url}{comment}")
+        label_comment = f"  # {label}" if label else ""
+        lines.append(f"  - url: {url}{label_comment}")
+        lines.append(f"    # cookie_env: TRACKER_X_COOKIE   # uncomment + set if this tracker needs a cookie")
 
     for feed in disabled_feeds:
         label = feed["label"]
         url = feed["url"]
         comment = f"  # {label} (disabled)" if label else "  # disabled"
-        lines.append(f"  # - {url}{comment}")
+        lines.append(f"  # - url: {url}{comment}")
+        lines.append(f"  #   # cookie_env: TRACKER_X_COOKIE")
 
     print("\n".join(lines))
 
