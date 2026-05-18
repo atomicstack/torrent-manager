@@ -209,11 +209,24 @@ func processItem(ctx context.Context, cfg Config, hc *http.Client, feedCookie st
 	}
 
 	r.Queried++
+	dedupStart := time.Now()
 	exists, err := seedctlGetStatus(ctx, hc, cfg.SeedctlURL, hash)
+	dedupDuration := time.Since(dedupStart)
 	if err != nil {
+		slog.Error("dedup_check_failed",
+			"title", it.Title,
+			"hash", hash,
+			"endpoint", cfg.SeedctlURL+"/v1/torrents/"+hash,
+			"duration_ms", dedupDuration.Milliseconds(),
+			"err", err)
 		return fmt.Errorf("seedctl status: %w", err)
 	}
-	slog.Info("dedup_check", "title", it.Title, "hash", hash, "exists_on_seedctl", exists)
+	slog.Info("dedup_check",
+		"title", it.Title,
+		"hash", hash,
+		"endpoint", cfg.SeedctlURL+"/v1/torrents/"+hash,
+		"duration_ms", dedupDuration.Milliseconds(),
+		"exists_on_seedctl", exists)
 	if exists {
 		r.Skipped++
 		slog.Info("skip_already_present", "title", it.Title, "hash", hash, "rule", rule.Name)
