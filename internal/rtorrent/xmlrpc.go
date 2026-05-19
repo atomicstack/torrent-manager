@@ -118,3 +118,165 @@ func firstNonEmpty(ss ...string) string {
 	}
 	return ""
 }
+
+// decodeXMLRPCResponseStringMatrix returns the response as a [][]string for
+// d.multicall / d.multicall2 responses where each row is itself an array of
+// string values. Used to fetch multiple per-torrent fields in one round-trip.
+// Returns an error for fault responses.
+func decodeXMLRPCResponseStringMatrix(raw []byte) ([][]string, error) {
+	if i := bytes.Index(raw, []byte("\r\n\r\n")); i >= 0 {
+		raw = raw[i+4:]
+	}
+
+	type cellT struct {
+		String string `xml:"string"`
+		I4     string `xml:"i4"`
+		Int    string `xml:"int"`
+	}
+	type rowDataT struct {
+		Values []cellT `xml:"value"`
+	}
+	type rowArrayT struct {
+		Data rowDataT `xml:"data"`
+	}
+	type rowValueT struct {
+		Array rowArrayT `xml:"array"`
+	}
+	type outerDataT struct {
+		Values []rowValueT `xml:"value"`
+	}
+	type outerArrayT struct {
+		Data outerDataT `xml:"data"`
+	}
+	type paramT struct {
+		Value struct {
+			Array outerArrayT `xml:"array"`
+		} `xml:"value"`
+	}
+	type valueT struct {
+		String string `xml:"string"`
+		I4     string `xml:"i4"`
+		Int    string `xml:"int"`
+	}
+	type memberT struct {
+		Name  string `xml:"name"`
+		Value valueT `xml:"value"`
+	}
+	type structT struct {
+		Members []memberT `xml:"member"`
+	}
+	type faultT struct {
+		Value struct {
+			Struct structT `xml:"struct"`
+		} `xml:"value"`
+	}
+	type respT struct {
+		XMLName xml.Name `xml:"methodResponse"`
+		Params  *struct {
+			Param paramT `xml:"param"`
+		} `xml:"params"`
+		Fault *faultT `xml:"fault"`
+	}
+
+	var r respT
+	if err := xml.Unmarshal(raw, &r); err != nil {
+		return nil, fmt.Errorf("parse xmlrpc: %w", err)
+	}
+	if r.Fault != nil {
+		var code, msg string
+		for _, m := range r.Fault.Value.Struct.Members {
+			switch m.Name {
+			case "faultCode":
+				code = firstNonEmpty(m.Value.I4, m.Value.Int, m.Value.String)
+			case "faultString":
+				msg = m.Value.String
+			}
+		}
+		return nil, fmt.Errorf("rtorrent fault %s: %s", code, msg)
+	}
+	if r.Params == nil {
+		return nil, nil
+	}
+	out := make([][]string, 0, len(r.Params.Param.Value.Array.Data.Values))
+	for _, row := range r.Params.Param.Value.Array.Data.Values {
+		cells := make([]string, 0, len(row.Array.Data.Values))
+		for _, cell := range row.Array.Data.Values {
+			cells = append(cells, firstNonEmpty(cell.String, cell.I4, cell.Int))
+		}
+		out = append(out, cells)
+	}
+	return out, nil
+}
+
+// decodeXMLRPCResponseStringArray returns the response as a []string. Used for
+// rtorrent calls like download_list that return an array of info hashes.
+// Returns an error for fault responses or for non-array shapes.
+func decodeXMLRPCResponseStringArray(raw []byte) ([]string, error) {
+	if i := bytes.Index(raw, []byte("\r\n\r\n")); i >= 0 {
+		raw = raw[i+4:]
+	}
+
+	type valueT struct {
+		String string `xml:"string"`
+		I4     string `xml:"i4"`
+		Int    string `xml:"int"`
+	}
+	type memberT struct {
+		Name  string `xml:"name"`
+		Value valueT `xml:"value"`
+	}
+	type structT struct {
+		Members []memberT `xml:"member"`
+	}
+	type faultT struct {
+		Value struct {
+			Struct structT `xml:"struct"`
+		} `xml:"value"`
+	}
+	type dataT struct {
+		Values []valueT `xml:"value"`
+	}
+	type arrayT struct {
+		Data dataT `xml:"data"`
+	}
+	type paramT struct {
+		Value struct {
+			Array arrayT `xml:"array"`
+		} `xml:"value"`
+	}
+	type respT struct {
+		XMLName xml.Name `xml:"methodResponse"`
+		Params  *struct {
+			Param paramT `xml:"param"`
+		} `xml:"params"`
+		Fault *faultT `xml:"fault"`
+	}
+
+	var r respT
+	if err := xml.Unmarshal(raw, &r); err != nil {
+		return nil, fmt.Errorf("parse xmlrpc: %w", err)
+	}
+	if r.Fault != nil {
+		var code, msg string
+		for _, m := range r.Fault.Value.Struct.Members {
+			switch m.Name {
+			case "faultCode":
+				code = firstNonEmpty(m.Value.I4, m.Value.Int, m.Value.String)
+			case "faultString":
+				msg = m.Value.String
+			}
+		}
+		return nil, fmt.Errorf("rtorrent fault %s: %s", code, msg)
+	}
+	if r.Params == nil {
+		return nil, nil
+	}
+	out := make([]string, 0, len(r.Params.Param.Value.Array.Data.Values))
+	for _, v := range r.Params.Param.Value.Array.Data.Values {
+		s := firstNonEmpty(v.String, v.I4, v.Int)
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out, nil
+}

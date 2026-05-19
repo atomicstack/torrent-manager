@@ -16,6 +16,7 @@ type rtorrentClient interface {
 	Ping() (string, error)
 	LoadTorrent(bytes []byte, knownHash, saveDir string) (string, error)
 	GetStatus(hash string) (api.TorrentStatus, error)
+	ListTorrents() ([]rtorrent.TorrentMetadata, error)
 }
 
 type handler struct {
@@ -26,9 +27,23 @@ func newHandler(c rtorrentClient) http.Handler {
 	mux := http.NewServeMux()
 	h := &handler{c: c}
 	mux.HandleFunc("GET /healthz", h.healthz)
+	mux.HandleFunc("GET /v1/torrents", h.listTorrents)
 	mux.HandleFunc("GET /v1/torrents/{hash}", h.getTorrent)
 	mux.HandleFunc("POST /v1/torrents", h.postTorrent)
 	return mux
+}
+
+func (h *handler) listTorrents(w http.ResponseWriter, _ *http.Request) {
+	rows, err := h.c.ListTorrents()
+	if err != nil {
+		http.Error(w, "internal", 500)
+		return
+	}
+	entries := make([]api.TorrentEntry, 0, len(rows))
+	for _, r := range rows {
+		entries = append(entries, api.TorrentEntry{Hash: r.Hash, Name: r.Name})
+	}
+	writeJSON(w, 200, api.TorrentListResponse{Torrents: entries})
 }
 
 func (h *handler) healthz(w http.ResponseWriter, _ *http.Request) {

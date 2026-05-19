@@ -37,6 +37,50 @@ func (c *Client) call(method string, args ...xmlValue) (string, error) {
 	return decodeXMLRPCResponse(resp)
 }
 
+// callStringMatrix runs an xmlrpc method that returns an array-of-arrays.
+func (c *Client) callStringMatrix(method string, args ...xmlValue) ([][]string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	resp, err := dialSCGI(c.addr, []byte(encodeXMLRPCCall(method, args...)))
+	if err != nil {
+		return nil, err
+	}
+	return decodeXMLRPCResponseStringMatrix(resp)
+}
+
+// TorrentMetadata is a (hash, name) pair returned by ListTorrents. Hash is
+// uppercase hex; Name is info.name (the .torrent's single filename or root
+// directory).
+type TorrentMetadata struct {
+	Hash string
+	Name string
+}
+
+// ListTorrents invokes d.multicall2 to fetch every torrent's hash + name in
+// one round-trip. Ordering reflects rtorrent's view (main).
+func (c *Client) ListTorrents() ([]TorrentMetadata, error) {
+	rows, err := c.callStringMatrix("d.multicall2",
+		xmlString(""),    // arg 1: target rtorrent (empty = current)
+		xmlString("main"), // arg 2: view to enumerate
+		xmlString("d.hash="),
+		xmlString("d.name="),
+	)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]TorrentMetadata, 0, len(rows))
+	for _, row := range rows {
+		if len(row) < 2 {
+			continue
+		}
+		out = append(out, TorrentMetadata{
+			Hash: strings.ToUpper(row[0]),
+			Name: row[1],
+		})
+	}
+	return out, nil
+}
+
 // Ping invokes system.client_version and returns it as a string.
 func (c *Client) Ping() (string, error) {
 	return c.call("system.client_version")

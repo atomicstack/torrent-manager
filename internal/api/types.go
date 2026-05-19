@@ -21,3 +21,15 @@ type HealthResponse struct {
 	OK              bool   `json:"ok"`
 	RTorrentVersion string `json:"rtorrent_version,omitempty"`
 }
+
+// TorrentEntry is a single (hash, name) pair from a listing.
+type TorrentEntry struct {
+	Hash string `json:"hash"` // uppercase 40-char hex
+	Name string `json:"name"` // info.name — single filename or root dir
+}
+
+// TorrentListResponse is returned by GET /v1/torrents. Ordering reflects
+// rtorrent's view (main).
+type TorrentListResponse struct {
+	Torrents []TorrentEntry `json:"torrents"`
+}

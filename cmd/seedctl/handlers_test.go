@@ -17,11 +17,18 @@ type stubClient struct {
 	ping   func() (string, error)
 	load   func([]byte, string, string) (string, error)
 	status func(string) (api.TorrentStatus, error)
+	list   func() ([]rtorrent.TorrentMetadata, error)
 }
 
 func (s *stubClient) Ping() (string, error)                             { return s.ping() }
 func (s *stubClient) LoadTorrent(b []byte, h, d string) (string, error) { return s.load(b, h, d) }
 func (s *stubClient) GetStatus(h string) (api.TorrentStatus, error)     { return s.status(h) }
+func (s *stubClient) ListTorrents() ([]rtorrent.TorrentMetadata, error) {
+	if s.list == nil {
+		return nil, nil
+	}
+	return s.list()
+}
 
 func TestHealthz_OK(t *testing.T) {
 	h := newHandler(&stubClient{ping: func() (string, error) { return "0.9.8", nil }})
@@ -39,6 +46,44 @@ func TestHealthz_RTorrentDown(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	assert.Equal(t, 503, w.Code)
+}
+
+func TestListTorrents_Empty(t *testing.T) {
+	h := newHandler(&stubClient{list: func() ([]rtorrent.TorrentMetadata, error) {
+		return []rtorrent.TorrentMetadata{}, nil
+	}})
+	req := httptest.NewRequest("GET", "/v1/torrents", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	assert.Equal(t, 200, w.Code)
+	assert.Contains(t, w.Body.String(), `"torrents":[]`)
+}
+
+func TestListTorrents_Populated(t *testing.T) {
+	h := newHandler(&stubClient{list: func() ([]rtorrent.TorrentMetadata, error) {
+		return []rtorrent.TorrentMetadata{
+			{Hash: "AAAA000000000000000000000000000000000000", Name: "Bobs.Burgers.S16E14.mkv"},
+			{Hash: "BBBB000000000000000000000000000000000000", Name: "Some.Movie.2024.mkv"},
+		}, nil
+	}})
+	req := httptest.NewRequest("GET", "/v1/torrents", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	assert.Equal(t, 200, w.Code)
+	body := w.Body.String()
+	assert.Contains(t, body, "AAAA000000000000000000000000000000000000")
+	assert.Contains(t, body, "Bobs.Burgers.S16E14.mkv")
+	assert.Contains(t, body, "BBBB000000000000000000000000000000000000")
+}
+
+func TestListTorrents_Error(t *testing.T) {
+	h := newHandler(&stubClient{list: func() ([]rtorrent.TorrentMetadata, error) {
+		return nil, errors.New("scgi down")
+	}})
+	req := httptest.NewRequest("GET", "/v1/torrents", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	assert.Equal(t, 500, w.Code)
 }
 
 func TestGetTorrent_NotFound(t *testing.T) {

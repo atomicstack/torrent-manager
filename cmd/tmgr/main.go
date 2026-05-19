@@ -10,6 +10,7 @@ import (
 	"regexp"
 
 	"github.com/atomicstack/torrent-manager/internal/feed"
+	"github.com/atomicstack/torrent-manager/internal/hashcache"
 	"github.com/atomicstack/torrent-manager/internal/tlsx"
 	"gopkg.in/yaml.v3"
 )
@@ -45,6 +46,7 @@ func main() {
 	certPath := flag.String("cert", "/etc/tmgr/tls/client.crt", "client cert")
 	keyPath := flag.String("key", "/etc/tmgr/tls/client.key", "client key")
 	modeFlag := flag.String("mode", "enqueue", "pipeline mode: observe (log only), fetch (download+dedup, no POST), enqueue (full)")
+	cachePath := flag.String("cache-file", "", "path to a JSON file caching positive seedctl dedup hits; empty = no cache")
 	flag.Parse()
 
 	var mode Mode
@@ -156,6 +158,17 @@ func main() {
 	}
 	httpC := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsCfg}}
 
+	var cache *hashcache.Cache
+	if *cachePath != "" {
+		c, cerr := hashcache.New(*cachePath)
+		if cerr != nil {
+			logger.Warn("hashcache open failed; running without cache", "path", *cachePath, "err", cerr)
+		} else {
+			cache = c
+			logger.Info("hashcache_loaded", "path", *cachePath, "size", c.Len(), "initialised", c.Initialised())
+		}
+	}
+
 	cfg := Config{
 		SeedctlURL: fc.SeedctlURL,
 		Feeds:      feeds,
@@ -166,6 +179,7 @@ func main() {
 		},
 		AnthropicKey: anthropicKey,
 		Mode:         mode,
+		Cache:        cache,
 	}
 
 	if _, err := Run(context.Background(), cfg, httpC); err != nil {

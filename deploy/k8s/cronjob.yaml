@@ -1,3 +1,15 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tmgr-cache
+  namespace: torrent-manager
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 64Mi
+---
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -29,9 +41,10 @@ spec:
                 - --ca=/etc/tmgr/tls/ca.crt
                 - --cert=/etc/tmgr/tls/client.crt
                 - --key=/etc/tmgr/tls/client.key
+                - --cache-file=/var/cache/tmgr/seen.json
                 # safety throttle. flip to --mode=fetch once observe logs look right,
                 # then to --mode=enqueue (or drop the flag — enqueue is the default).
-                - --mode=observe
+                - --mode=enqueue
               envFrom:
                 - secretRef:
                     name: tmgr-cookies
@@ -43,6 +56,8 @@ spec:
                 - name: tls
                   mountPath: /etc/tmgr/tls
                   readOnly: true
+                - name: cache
+                  mountPath: /var/cache/tmgr
               resources:
                 requests:
                   cpu: 50m
@@ -65,3 +80,6 @@ spec:
               secret:
                 secretName: tmgr-tls
                 defaultMode: 0440   # owner+group read; fsGroup=65532 grants the pod group access
+            - name: cache
+              persistentVolumeClaim:
+                claimName: tmgr-cache
