@@ -107,20 +107,26 @@ func main() {
 	}
 
 	feeds := make([]Feed, 0, len(fc.Feeds))
+	// dedup cookie-env log lines — multiple feeds typically share one cookie_env,
+	// so emit one tracker_cookie / cookie_env-missing record per env name.
+	loggedCookieEnv := make(map[string]struct{}, len(fc.Feeds))
 	for _, ff := range fc.Feeds {
 		var cookie string
 		if ff.CookieEnv != "" {
 			cookie = os.Getenv(ff.CookieEnv)
-			if cookie == "" {
-				logger.Warn("cookie_env not set; feed will be polled without a cookie",
-					"env", ff.CookieEnv, "feed", ff.URL)
-			} else {
-				l := len(cookie)
-				if l < 24 {
-					logger.Info("tracker_cookie", "env", ff.CookieEnv, "len", l)
+			if _, seen := loggedCookieEnv[ff.CookieEnv]; !seen {
+				loggedCookieEnv[ff.CookieEnv] = struct{}{}
+				if cookie == "" {
+					logger.Warn("cookie_env not set; feeds bound to it will poll without a cookie",
+						"env", ff.CookieEnv)
 				} else {
-					logger.Info("tracker_cookie", "env", ff.CookieEnv, "len", l,
-						"head8", cookie[:8], "tail8", cookie[l-8:])
+					l := len(cookie)
+					if l < 24 {
+						logger.Info("tracker_cookie", "env", ff.CookieEnv, "len", l)
+					} else {
+						logger.Info("tracker_cookie", "env", ff.CookieEnv, "len", l,
+							"head8", cookie[:8], "tail8", cookie[l-8:])
+					}
 				}
 			}
 		}
