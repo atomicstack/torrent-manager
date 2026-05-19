@@ -120,6 +120,22 @@ func TestHasName_EmptyNameDoesNotMatch(t *testing.T) {
 	assert.True(t, c.HasHash("AABBCCDDEEFF00112233445566778899AABBCCDD"))
 }
 
+func TestFileSize_TracksDiskBytes(t *testing.T) {
+	path := tmpCachePath(t)
+	c, err := hashcache.New(path)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), c.FileSize(), "missing file → 0")
+
+	require.NoError(t, c.Add("AABBCCDDEEFF00112233445566778899AABBCCDD", "Foo.mkv"))
+	sz := c.FileSize()
+	assert.Greater(t, sz, int64(0))
+
+	// re-stat via os to confirm parity
+	fi, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, fi.Size(), sz)
+}
+
 func TestNew_NilReceiverIsNoOp(t *testing.T) {
 	var c *hashcache.Cache
 	assert.False(t, c.HasHash("AABBCCDDEEFF00112233445566778899AABBCCDD"))

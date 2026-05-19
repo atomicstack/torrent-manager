@@ -109,7 +109,9 @@ func Run(ctx context.Context, cfg Config, hc *http.Client) (RunResult, error) {
 
 	mode := cfg.effectiveMode()
 	slog.Info("run_start", "mode", string(mode), "feeds", r.Feeds, "shows", len(cfg.Shows),
-		"cache_initialised", cfg.Cache.Initialised(), "cache_size", cfg.Cache.Len())
+		"cache_initialised", cfg.Cache.Initialised(),
+		"cache_hash_count", cfg.Cache.Len(),
+		"cache_file_size", cfg.Cache.FileSize())
 
 	// bulk-populate the cache from seedctl if the local file is missing/empty.
 	// the rest of the run still works without it; the per-item GET is just the

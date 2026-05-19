@@ -171,7 +171,11 @@ func main() {
 			logger.Warn("hashcache open failed; running without cache", "path", *cachePath, "err", cerr)
 		} else {
 			cache = c
-			logger.Info("hashcache_loaded", "path", *cachePath, "size", c.Len(), "initialised", c.Initialised())
+			logger.Info("hashcache_loaded",
+				"path", *cachePath,
+				"hash_count", c.Len(),
+				"file_size", c.FileSize(),
+				"initialised", c.Initialised())
 		}
 	}
 

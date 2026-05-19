@@ -96,6 +96,19 @@ func (c *Cache) Len() int {
 	return len(c.byHash)
 }
 
+// FileSize returns the on-disk size of the backing file in bytes. Returns 0
+// when the file is missing or unreadable.
+func (c *Cache) FileSize() int64 {
+	if c == nil {
+		return 0
+	}
+	fi, err := os.Stat(c.path)
+	if err != nil {
+		return 0
+	}
+	return fi.Size()
+}
+
 // HasHash reports whether hash (case-insensitive) is cached.
 func (c *Cache) HasHash(hash string) bool {
 	if c == nil {
