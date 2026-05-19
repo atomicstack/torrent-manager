@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -89,7 +90,12 @@ func withLogging(next http.Handler) http.Handler {
 		if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
 			cn = r.TLS.PeerCertificates[0].Subject.CommonName
 		}
-		rw := &statusRecorder{ResponseWriter: w, status: 200}
+		// wrap body + response so we can count actual bytes across the wire.
+		// req_bytes tracks bytes the handler consumed; resp_bytes tracks bytes
+		// the handler wrote (excludes headers).
+		bodyCounter := &countingReadCloser{ReadCloser: r.Body}
+		r.Body = bodyCounter
+		rw := &respRecorder{ResponseWriter: w, status: 200}
 		next.ServeHTTP(rw, r)
 		slog.Info("request",
 			"method", r.Method,
@@ -97,16 +103,36 @@ func withLogging(next http.Handler) http.Handler {
 			"status", rw.status,
 			"cn", cn,
 			"remote", r.RemoteAddr,
+			"req_bytes", bodyCounter.n,
+			"resp_bytes", rw.bytes,
 			"latency_ms", time.Since(start).Milliseconds())
 	})
 }
 
-type statusRecorder struct {
+type respRecorder struct {
 	http.ResponseWriter
 	status int
+	bytes  int64
 }
 
-func (s *statusRecorder) WriteHeader(code int) {
+func (s *respRecorder) WriteHeader(code int) {
 	s.status = code
 	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *respRecorder) Write(b []byte) (int, error) {
+	n, err := s.ResponseWriter.Write(b)
+	s.bytes += int64(n)
+	return n, err
+}
+
+type countingReadCloser struct {
+	io.ReadCloser
+	n int64
+}
+
+func (c *countingReadCloser) Read(p []byte) (int, error) {
+	n, err := c.ReadCloser.Read(p)
+	c.n += int64(n)
+	return n, err
 }
