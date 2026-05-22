@@ -24,9 +24,10 @@ import (
 
 // Feed holds the URL and optional cookie for a single RSS feed.
 type Feed struct {
-	Name   string // human-readable label; falls back to URL in logs if empty
-	URL    string
-	Cookie string // empty = no Cookie header sent
+	Name     string // human-readable label; falls back to URL in logs if empty
+	URL      string
+	Cookie   string // empty = no Cookie header sent
+	Category string // phase-2 plumbing — parsed but not yet consumed (tmweb ui)
 
 	// TitleExtract is an optional regex with exactly one capture group. When set,
 	// it is applied to each item's <title>; capture-group-1 becomes the canonical

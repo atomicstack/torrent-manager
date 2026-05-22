@@ -19,6 +19,7 @@ type fileFeed struct {
 	Name         string `yaml:"name,omitempty"`
 	URL          string `yaml:"url"`
 	CookieEnv    string `yaml:"cookie_env,omitempty"`
+	Category     string `yaml:"category,omitempty"`
 	TitleExtract string `yaml:"title_extract,omitempty"`
 }
 
@@ -148,6 +149,7 @@ func main() {
 			Name:         ff.Name,
 			URL:          ff.URL,
 			Cookie:       cookie,
+			Category:     ff.Category,
 			TitleExtract: titleExtract,
 		})
 	}
