@@ -1,10 +1,8 @@
 package hashcache_test
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/atomicstack/torrent-manager/internal/hashcache"
@@ -14,7 +12,7 @@ import (
 
 func tmpCachePath(t *testing.T) string {
 	t.Helper()
-	return filepath.Join(t.TempDir(), "seen.json")
+	return filepath.Join(t.TempDir(), "seen.db")
 }
 
 func TestNew_MissingFileIsUninitialised(t *testing.T) {
@@ -39,46 +37,12 @@ func TestPopulateThenReopen(t *testing.T) {
 		assert.True(t, c.HasHash(e.Hash))
 		assert.True(t, c.HasName(e.Name))
 	}
+	require.NoError(t, c.Close())
 
 	c2, err := hashcache.New(path)
 	require.NoError(t, err)
 	assert.True(t, c2.Initialised())
 	assert.Equal(t, 2, c2.Len())
-}
-
-func TestFile_IsSortedAndPretty(t *testing.T) {
-	path := tmpCachePath(t)
-	c, err := hashcache.New(path)
-	require.NoError(t, err)
-	require.NoError(t, c.Populate([]hashcache.Entry{
-		{Hash: "BBBB000000000000000000000000000000000000", Name: "zeta release"},
-		{Hash: "AAAA000000000000000000000000000000000000", Name: "alpha release"},
-		{Hash: "CCCC000000000000000000000000000000000000", Name: "Mid Release"},
-	}))
-
-	body, err := os.ReadFile(path)
-	require.NoError(t, err)
-	s := string(body)
-
-	// pretty-printed: two-space indents
-	assert.Contains(t, s, "  \"torrents\": [\n")
-	assert.Contains(t, s, "    {\n")
-	assert.Contains(t, s, "\n  ]\n")
-
-	// alpha < mid < zeta (case-insensitive)
-	idxAlpha := strings.Index(s, "alpha release")
-	idxMid := strings.Index(s, "Mid Release")
-	idxZeta := strings.Index(s, "zeta release")
-	assert.Greater(t, idxAlpha, -1)
-	assert.Greater(t, idxMid, idxAlpha, "Mid should follow alpha")
-	assert.Greater(t, idxZeta, idxMid, "zeta should follow Mid")
-
-	// must be a parseable JSON document, not jsonl
-	var doc struct {
-		Torrents []hashcache.Entry `json:"torrents"`
-	}
-	require.NoError(t, json.Unmarshal(body, &doc))
-	assert.Len(t, doc.Torrents, 3)
 }
 
 func TestAdd_PersistsAcrossReopen(t *testing.T) {
@@ -87,6 +51,7 @@ func TestAdd_PersistsAcrossReopen(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, c.Add("AABBCCDDEEFF00112233445566778899AABBCCDD", "Foo.S01E01.mkv"))
 	require.NoError(t, c.Add("1122334455667788990011223344556677889900", "Bar.S01E01.mkv"))
+	require.NoError(t, c.Close())
 
 	c2, err := hashcache.New(path)
 	require.NoError(t, err)
@@ -124,13 +89,12 @@ func TestFileSize_TracksDiskBytes(t *testing.T) {
 	path := tmpCachePath(t)
 	c, err := hashcache.New(path)
 	require.NoError(t, err)
-	assert.Equal(t, int64(0), c.FileSize(), "missing file → 0")
-
+	// sqlite always materialises the file on open, so size is non-zero from
+	// the start. confirm parity with os.Stat across an Add.
 	require.NoError(t, c.Add("AABBCCDDEEFF00112233445566778899AABBCCDD", "Foo.mkv"))
 	sz := c.FileSize()
 	assert.Greater(t, sz, int64(0))
 
-	// re-stat via os to confirm parity
 	fi, err := os.Stat(path)
 	require.NoError(t, err)
 	assert.Equal(t, fi.Size(), sz)

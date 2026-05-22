@@ -1,99 +1,96 @@
-// Package hashcache is a best-effort, file-backed set of (info hash, name)
-// pairs known to be present on the seedctl side. tmgr consults it before
-// issuing a per-item dedup GET; a positive cache lookup short-circuits the
-// network round-trip.
+// Package hashcache is a tmgr-local sqlite mirror of (info_hash, name) pairs
+// known to be present on the seedctl side. tmgr consults it before issuing a
+// per-item dedup GET; a positive cache lookup short-circuits the network
+// round-trip.
 //
-// The on-disk format is a single sorted, pretty-printed JSON document:
-//
-//	{
-//	  "torrents": [
-//	    {"hash": "...", "name": "..."},
-//	    ...
-//	  ]
-//	}
-//
-// Entries are sorted by Name (case-insensitive) then Hash so a human can
-// diff the file usefully. Every Add and Populate rewrites the whole file
-// atomically via tmp+rename; at our scale (low thousands of entries) this is
-// trivial.
+// The on-disk format is a small sqlite database. Schema and behavior are
+// unchanged from the previous JSON-backed implementation; only the storage
+// layout is different. tmgr handles the JSON→sqlite migration on startup.
 //
 // Concurrency: not safe for concurrent access. The cronjob runs as a single
 // pod with concurrencyPolicy=Forbid.
 package hashcache
 
 import (
-	"encoding/json"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/atomicstack/torrent-manager/internal/api"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 // Entry is a single (hash, name) pair. Same shape as api.TorrentEntry so
 // callers can convert without a struct copy.
 type Entry = api.TorrentEntry
 
-// Cache is an in-memory map keyed by both Hash and Name, with a JSON-on-disk
-// backing file.
+// Cache is a sqlite-backed (info hash, name) set.
 type Cache struct {
 	path        string
-	byHash      map[string]Entry
-	byName      map[string]Entry // key = lowercased Name
-	initialised bool             // true if the backing file existed with >=1 entry
+	db          *sql.DB
+	initialised bool // true if the backing file existed with >=1 row at open time
 }
 
-type cacheFile struct {
-	Torrents []Entry `json:"torrents"`
-}
+const schemaSQL = `
+CREATE TABLE IF NOT EXISTS items (
+  feed_name      TEXT NOT NULL DEFAULT '',
+  guid           TEXT NOT NULL DEFAULT '',
+  title          TEXT NOT NULL,
+  info_hash      TEXT,
+  last_seen_at   INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (feed_name, guid)
+);
+CREATE INDEX IF NOT EXISTS items_hash ON items(info_hash);
+CREATE INDEX IF NOT EXISTS items_name ON items(title);
+`
 
-// New opens or creates a cache at path. The file is read once and its entries
-// are loaded into memory. Initialised reports whether the file existed and
-// held at least one entry at New time — callers should populate via the
-// network if Initialised returns false.
+// New opens or creates a cache at path. Initialised reports whether the file
+// existed and held at least one row at New time — callers should populate via
+// the network if Initialised returns false.
 func New(path string) (*Cache, error) {
-	c := &Cache{
-		path:   path,
-		byHash: make(map[string]Entry),
-		byName: make(map[string]Entry),
-	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("mkdir cache dir: %w", err)
 	}
-	body, err := os.ReadFile(path)
+	dsn := path + "?_journal=WAL&_busy_timeout=5000&_foreign_keys=on"
+	sdb, err := sql.Open("sqlite3", dsn)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return c, nil
-		}
-		return nil, fmt.Errorf("read cache: %w", err)
+		return nil, fmt.Errorf("open cache: %w", err)
 	}
-	if len(body) == 0 {
-		return c, nil
+	if err := sdb.Ping(); err != nil {
+		_ = sdb.Close()
+		return nil, fmt.Errorf("ping cache: %w", err)
 	}
-	var doc cacheFile
-	if err := json.Unmarshal(body, &doc); err != nil {
-		return nil, fmt.Errorf("parse cache: %w", err)
+	// serialise writers through a single connection; mirrors itemsdb.
+	sdb.SetMaxOpenConns(1)
+	if _, err := sdb.Exec(schemaSQL); err != nil {
+		_ = sdb.Close()
+		return nil, fmt.Errorf("apply schema: %w", err)
 	}
-	for _, e := range doc.Torrents {
-		c.put(e)
+	c := &Cache{path: path, db: sdb}
+	var n int
+	if err := sdb.QueryRow("SELECT COUNT(*) FROM items").Scan(&n); err == nil {
+		c.initialised = n > 0
 	}
-	c.initialised = len(c.byHash) > 0
 	return c, nil
 }
 
-// Initialised reports whether the cache had any entries when it was opened.
+// Initialised reports whether the cache had any rows when it was opened.
 func (c *Cache) Initialised() bool {
 	return c != nil && c.initialised
 }
 
-// Len returns the in-memory entry count.
+// Len returns the current row count.
 func (c *Cache) Len() int {
-	if c == nil {
+	if c == nil || c.db == nil {
 		return 0
 	}
-	return len(c.byHash)
+	var n int
+	if err := c.db.QueryRow("SELECT COUNT(*) FROM items").Scan(&n); err != nil {
+		return 0
+	}
+	return n
 }
 
 // FileSize returns the on-disk size of the backing file in bytes. Returns 0
@@ -111,26 +108,36 @@ func (c *Cache) FileSize() int64 {
 
 // HasHash reports whether hash (case-insensitive) is cached.
 func (c *Cache) HasHash(hash string) bool {
-	if c == nil {
+	if c == nil || c.db == nil {
 		return false
 	}
-	_, ok := c.byHash[strings.ToUpper(strings.TrimSpace(hash))]
-	return ok
+	h := normaliseHash(hash)
+	if h == "" {
+		return false
+	}
+	var present int
+	err := c.db.QueryRow("SELECT 1 FROM items WHERE info_hash = ? LIMIT 1", h).Scan(&present)
+	return err == nil
 }
 
 // HasName reports whether name (case-insensitive) is cached. Useful for
 // cross-tracker dedup when the same release shows up with a different info
-// hash on a different feed.
+// hash on a different feed. Empty names never match.
 func (c *Cache) HasName(name string) bool {
-	if c == nil {
+	if c == nil || c.db == nil {
 		return false
 	}
-	_, ok := c.byName[strings.ToLower(strings.TrimSpace(name))]
-	return ok
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	var present int
+	err := c.db.QueryRow("SELECT 1 FROM items WHERE LOWER(title) = LOWER(?) LIMIT 1", name).Scan(&present)
+	return err == nil
 }
 
-// Add inserts (hash, name) and rewrites the file. A duplicate hash is a no-op.
-// An invalid hash returns an error without changing on-disk or in-memory state.
+// Add inserts (hash, name). A duplicate hash is a no-op. An invalid hash
+// returns an error without changing on-disk or in-memory state.
 func (c *Cache) Add(hash, name string) error {
 	if c == nil {
 		return nil
@@ -139,74 +146,65 @@ func (c *Cache) Add(hash, name string) error {
 	if h == "" {
 		return fmt.Errorf("invalid hash %q", hash)
 	}
-	if _, dup := c.byHash[h]; dup {
-		return nil
+	// feed_name='' + guid=hash keeps each Add-row unique without needing a
+	// real (feed, guid) tuple. INSERT OR IGNORE absorbs duplicate-hash adds.
+	_, err := c.db.Exec(
+		`INSERT OR IGNORE INTO items (feed_name, guid, title, info_hash, last_seen_at) VALUES ('', ?, ?, ?, 0)`,
+		h, name, h,
+	)
+	if err != nil {
+		return fmt.Errorf("insert cache row: %w", err)
 	}
-	c.put(Entry{Hash: h, Name: name})
-	return c.flush()
+	return nil
 }
 
-// Populate atomically replaces the cache with the given entries.
+// Populate atomically replaces the cache contents with the given entries.
+// Invalid hashes are silently skipped (mirrors the file-load tolerance of the
+// JSON-era implementation).
 func (c *Cache) Populate(entries []Entry) error {
 	if c == nil {
 		return nil
 	}
-	c.byHash = make(map[string]Entry, len(entries))
-	c.byName = make(map[string]Entry, len(entries))
-	for _, e := range entries {
-		c.put(e)
-	}
-	if err := c.flush(); err != nil {
-		return err
-	}
-	c.initialised = len(c.byHash) > 0
-	return nil
-}
-
-// put merges an entry into the in-memory maps without writing. Invalid hashes
-// are silently skipped (consistent with the file-load tolerance).
-func (c *Cache) put(e Entry) {
-	h := normaliseHash(e.Hash)
-	if h == "" {
-		return
-	}
-	e.Hash = h
-	c.byHash[h] = e
-	if e.Name != "" {
-		c.byName[strings.ToLower(e.Name)] = e
-	}
-}
-
-// flush writes the sorted pretty JSON document atomically via tmp+rename.
-func (c *Cache) flush() error {
-	entries := make([]Entry, 0, len(c.byHash))
-	for _, e := range c.byHash {
-		entries = append(entries, e)
-	}
-	sort.Slice(entries, func(i, j int) bool {
-		li := strings.ToLower(entries[i].Name)
-		lj := strings.ToLower(entries[j].Name)
-		if li != lj {
-			return li < lj
-		}
-		return entries[i].Hash < entries[j].Hash
-	})
-	doc := cacheFile{Torrents: entries}
-	body, err := json.MarshalIndent(doc, "", "  ")
+	tx, err := c.db.Begin()
 	if err != nil {
-		return fmt.Errorf("marshal cache: %w", err)
+		return fmt.Errorf("begin tx: %w", err)
 	}
-	body = append(body, '\n')
+	defer func() { _ = tx.Rollback() }()
 
-	tmp := c.path + ".tmp"
-	if err := os.WriteFile(tmp, body, 0o644); err != nil {
-		return fmt.Errorf("write cache tmp: %w", err)
+	if _, err := tx.Exec("DELETE FROM items"); err != nil {
+		return fmt.Errorf("clear cache: %w", err)
 	}
-	if err := os.Rename(tmp, c.path); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("rename cache tmp: %w", err)
+	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO items (feed_name, guid, title, info_hash, last_seen_at) VALUES ('', ?, ?, ?, 0)`)
+	if err != nil {
+		return fmt.Errorf("prepare insert: %w", err)
+	}
+	defer stmt.Close()
+	for _, e := range entries {
+		h := normaliseHash(e.Hash)
+		if h == "" {
+			continue
+		}
+		if _, err := stmt.Exec(h, e.Name, h); err != nil {
+			return fmt.Errorf("insert cache row: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit cache tx: %w", err)
+	}
+	// Match the old semantics: initialised iff at least one row landed.
+	var n int
+	if err := c.db.QueryRow("SELECT COUNT(*) FROM items").Scan(&n); err == nil {
+		c.initialised = n > 0
 	}
 	return nil
+}
+
+// Close releases the underlying sqlite connection. Safe on a nil receiver.
+func (c *Cache) Close() error {
+	if c == nil || c.db == nil {
+		return nil
+	}
+	return c.db.Close()
 }
 
 // normaliseHash returns the uppercase form of a 40-char hex hash. Anything

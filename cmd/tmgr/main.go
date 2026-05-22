@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"regexp"
+	"strings"
 
 	"github.com/atomicstack/torrent-manager/internal/feed"
 	"github.com/atomicstack/torrent-manager/internal/hashcache"
@@ -47,7 +49,7 @@ func main() {
 	certPath := flag.String("cert", "/etc/tmgr/tls/client.crt", "client cert")
 	keyPath := flag.String("key", "/etc/tmgr/tls/client.key", "client key")
 	modeFlag := flag.String("mode", "enqueue", "pipeline mode: observe (log only), fetch (download+dedup, no POST), enqueue (full)")
-	cachePath := flag.String("cache-file", "", "path to a JSON file caching positive seedctl dedup hits; empty = no cache")
+	cachePath := flag.String("cache-file", "", "path to a sqlite db caching positive seedctl dedup hits; empty = no cache. a sibling .json file (legacy format) is imported once on startup then renamed to .json.imported")
 	flag.Parse()
 
 	var mode Mode
@@ -178,6 +180,24 @@ func main() {
 				"hash_count", c.Len(),
 				"file_size", c.FileSize(),
 				"initialised", c.Initialised())
+
+			// one-shot migration: if the cache is empty and a sibling legacy
+			// json file exists, import it then rename to .json.imported so we
+			// don't re-import on subsequent runs.
+			if !c.Initialised() {
+				jsonPath := strings.TrimSuffix(*cachePath, ".db") + ".json"
+				if jsonPath != *cachePath {
+					if entries := importLegacyJSON(jsonPath); len(entries) > 0 {
+						if err := c.Populate(entries); err == nil {
+							_ = os.Rename(jsonPath, jsonPath+".imported")
+							logger.Info("hashcache_imported_from_json",
+								"from", jsonPath, "to", *cachePath, "count", len(entries))
+						} else {
+							logger.Warn("hashcache_import_failed", "err", err)
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -198,4 +218,21 @@ func main() {
 		logger.Error("run", "err", err)
 		os.Exit(1)
 	}
+}
+
+// importLegacyJSON reads the legacy {"torrents": [...]} JSON cache file. It
+// returns nil if the file is missing or malformed — the caller treats that as
+// "nothing to import" without error.
+func importLegacyJSON(jsonPath string) []hashcache.Entry {
+	body, err := os.ReadFile(jsonPath)
+	if err != nil {
+		return nil
+	}
+	var doc struct {
+		Torrents []hashcache.Entry `json:"torrents"`
+	}
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return nil
+	}
+	return doc.Torrents
 }

@@ -13,7 +13,7 @@ build: build-tmgr build-seedctl ## build both binaries for the local host
 
 build-tmgr: ## build tmgr (cross-compile arm64 for k3s)
 	mkdir -p dist
-	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o dist/tmgr-linux-arm64 ./cmd/tmgr
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=1 go build -tags=sqlite_fts5 -o dist/tmgr-linux-arm64 ./cmd/tmgr
 
 build-seedctl: ## build seedctl (cross-compile amd64 for the seedbox)
 	mkdir -p dist
