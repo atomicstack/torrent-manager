@@ -583,3 +583,41 @@ func TestPostItems_EmptyIsNoOp(t *testing.T) {
 	err := postItems(context.Background(), nil, "http://invalid.invalid", nil)
 	require.NoError(t, err)
 }
+
+// TestBootstrapFromExport_PopulatesCache verifies that the cache-bootstrap
+// helper hits /v1/items/export, decodes the items list, and produces a
+// hashcache.Entry slice with items lacking an info_hash skipped.
+func TestBootstrapFromExport_PopulatesCache(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/items/export" {
+			http.Error(w, "404", 404)
+			return
+		}
+		body := api.ItemsListResponse{Items: []api.ItemRecord{
+			{FeedName: "f", GUID: "1", Title: "Foo S01E01", InfoHash: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", FirstSeenAt: 1, LastSeenAt: 1},
+			{FeedName: "f", GUID: "2", Title: "Bar", InfoHash: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", FirstSeenAt: 1, LastSeenAt: 1},
+			// an item without info_hash must be skipped — these have no dedup value.
+			{FeedName: "f", GUID: "3", Title: "Hashless", FirstSeenAt: 1, LastSeenAt: 1},
+		}}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(body)
+	}))
+	defer srv.Close()
+
+	got, err := bootstrapFromExport(context.Background(), srv.Client(), srv.URL)
+	require.NoError(t, err)
+	require.Len(t, got, 2, "hashless items must be skipped")
+	assert.Equal(t, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", got[0].Hash)
+	assert.Equal(t, "Foo S01E01", got[0].Name)
+}
+
+// TestBootstrapFromExport_StatusNon200 verifies that a non-200 response from
+// the export endpoint produces an error rather than a silent empty slice.
+func TestBootstrapFromExport_StatusNon200(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	_, err := bootstrapFromExport(context.Background(), srv.Client(), srv.URL)
+	require.Error(t, err)
+}

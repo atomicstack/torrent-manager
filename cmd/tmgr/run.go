@@ -116,10 +116,10 @@ func Run(ctx context.Context, cfg Config, hc *http.Client) (RunResult, error) {
 	// fallback. failures are logged at WARN and don't abort the run.
 	if cfg.Cache != nil && !cfg.Cache.Initialised() {
 		popStart := time.Now()
-		entries, err := seedctlListTorrents(ctx, hc, cfg.SeedctlURL)
+		entries, err := bootstrapFromExport(ctx, hc, cfg.SeedctlURL)
 		if err != nil {
 			slog.Warn("cache_populate_failed",
-				"endpoint", cfg.SeedctlURL+"/v1/torrents",
+				"endpoint", cfg.SeedctlURL+"/v1/items/export",
 				"duration_ms", time.Since(popStart).Milliseconds(),
 				"err", err)
 		} else if perr := cfg.Cache.Populate(entries); perr != nil {
@@ -127,7 +127,7 @@ func Run(ctx context.Context, cfg Config, hc *http.Client) (RunResult, error) {
 		} else {
 			r.CachePopulate = 1
 			slog.Info("cache_populate",
-				"endpoint", cfg.SeedctlURL+"/v1/torrents",
+				"endpoint", cfg.SeedctlURL+"/v1/items/export",
 				"count", len(entries),
 				"duration_ms", time.Since(popStart).Milliseconds())
 		}
@@ -222,12 +222,14 @@ func Run(ctx context.Context, cfg Config, hc *http.Client) (RunResult, error) {
 	return r, nil
 }
 
-// seedctlListTorrents fetches the full (hash, name) list from seedctl. used
-// once per run when the local cache is uninitialised.
-func seedctlListTorrents(ctx context.Context, hc *http.Client, base string) ([]hashcache.Entry, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+// bootstrapFromExport fetches the full items.db export from seedctl and turns
+// it into a hashcache.Entry slice for Populate. Used once per tmgr startup
+// when the local sqlite cache is missing or empty. Items without an info_hash
+// are skipped — they're irrelevant to the dedup fast-path.
+func bootstrapFromExport(ctx context.Context, hc *http.Client, base string) ([]hashcache.Entry, error) {
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, "GET", base+"/v1/torrents", nil)
+	req, _ := http.NewRequestWithContext(ctx, "GET", base+"/v1/items/export", nil)
 	resp, err := hc.Do(req)
 	if err != nil {
 		return nil, err
@@ -236,11 +238,18 @@ func seedctlListTorrents(ctx context.Context, hc *http.Client, base string) ([]h
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("status %d", resp.StatusCode)
 	}
-	var body api.TorrentListResponse
+	var body api.ItemsListResponse
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return nil, fmt.Errorf("decode list response: %w", err)
+		return nil, fmt.Errorf("decode export response: %w", err)
 	}
-	return body.Torrents, nil
+	out := make([]hashcache.Entry, 0, len(body.Items))
+	for _, it := range body.Items {
+		if it.InfoHash == "" {
+			continue
+		}
+		out = append(out, hashcache.Entry{Hash: it.InfoHash, Name: it.Title})
+	}
+	return out, nil
 }
 
 func processItem(ctx context.Context, cfg Config, hc *http.Client, feedCookie string, it feed.Item, rule feed.ShowRule, r *RunResult) error {
