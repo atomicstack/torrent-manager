@@ -103,10 +103,21 @@ func (h *handler) postTorrent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "load failed", 422)
 		return
 	}
+	// best-effort: record auto-enqueue history. a write failure here must not
+	// fail the request — the torrent is already loaded into rtorrent.
+	if err := h.items.RecordEnqueue(r.Context(), itemsdb.Enqueue{
+		InfoHash:   gotHash,
+		SaveDir:    saveDir,
+		Source:     itemsdb.SourceAuto,
+		EnqueuedAt: time.Now(),
+	}); err != nil {
+		slog.Warn("record enqueue", "hash", gotHash, "err", err)
+	}
 	writeJSON(w, 200, api.AddTorrentResponse{InfoHash: gotHash, Added: true})
 }
 
 func (h *handler) upsertItems(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<20)
 	var req api.ItemsUpsertRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)

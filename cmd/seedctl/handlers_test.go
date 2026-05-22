@@ -110,6 +110,7 @@ func TestGetTorrent_Found(t *testing.T) {
 
 func TestPostTorrent_Adds(t *testing.T) {
 	called := false
+	_, db := newTestItemsHandler(t)
 	h := newHandler(&stubClient{
 		load: func(b []byte, _ string, _ string) (string, error) {
 			called = true
@@ -119,7 +120,7 @@ func TestPostTorrent_Adds(t *testing.T) {
 		status: func(string) (api.TorrentStatus, error) {
 			return api.TorrentStatus{}, rtorrent.ErrNotFound
 		},
-	}, nil)
+	}, db)
 	req := httptest.NewRequest("POST", "/v1/torrents", strings.NewReader("fake-bytes"))
 	req.Header.Set("Content-Type", "application/x-bittorrent")
 	req.Header.Set("X-Info-Hash", "DEADBEEF"+strings.Repeat("0", 32))
@@ -151,6 +152,7 @@ func TestPostTorrent_Duplicate(t *testing.T) {
 
 func TestPostTorrent_AddsWithSaveDirectory(t *testing.T) {
 	var capturedDir string
+	_, db := newTestItemsHandler(t)
 	h := newHandler(&stubClient{
 		load: func(b []byte, _ string, dir string) (string, error) {
 			capturedDir = dir
@@ -159,7 +161,7 @@ func TestPostTorrent_AddsWithSaveDirectory(t *testing.T) {
 		status: func(string) (api.TorrentStatus, error) {
 			return api.TorrentStatus{}, rtorrent.ErrNotFound
 		},
-	}, nil)
+	}, db)
 	req := httptest.NewRequest("POST", "/v1/torrents", strings.NewReader("fake-bytes"))
 	req.Header.Set("Content-Type", "application/x-bittorrent")
 	req.Header.Set("X-Info-Hash", "DEADBEEF"+strings.Repeat("0", 32))

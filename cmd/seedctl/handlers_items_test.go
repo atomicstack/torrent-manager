@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/atomicstack/torrent-manager/internal/api"
 	"github.com/atomicstack/torrent-manager/internal/itemsdb"
+	"github.com/atomicstack/torrent-manager/internal/rtorrent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -55,6 +57,44 @@ func TestListItems_FTS5Search(t *testing.T) {
 	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
 	require.Len(t, resp.Items, 1)
 	assert.Contains(t, resp.Items[0].Title, "Guy Mont")
+}
+
+func TestPostTorrent_RecordsEnqueue(t *testing.T) {
+	hash := "DEADBEEF" + strings.Repeat("0", 32)
+	saveDir := "/home/seedbox/t/tv/show/season1"
+
+	db, err := itemsdb.Open(filepath.Join(t.TempDir(), "items.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	// seed the item so the join in List can find the matching info_hash.
+	now := time.Now()
+	require.NoError(t, db.Upsert(context.Background(), []itemsdb.Item{
+		{FeedName: "TrackerA (TV)", GUID: "1", Title: "Show S01E01", InfoHash: hash, FirstSeenAt: now, LastSeenAt: now},
+	}))
+
+	h := newHandler(&stubClient{
+		status: func(string) (api.TorrentStatus, error) {
+			return api.TorrentStatus{}, rtorrent.ErrNotFound
+		},
+		load: func(_ []byte, gotHash, _ string) (string, error) {
+			return gotHash, nil
+		},
+	}, db)
+
+	req := httptest.NewRequest("POST", "/v1/torrents", strings.NewReader("fake-bytes"))
+	req.Header.Set("Content-Type", "application/x-bittorrent")
+	req.Header.Set("X-Info-Hash", hash)
+	req.Header.Set("X-Save-Directory", saveDir)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	rows, err := db.List(context.Background(), itemsdb.ListQuery{IncludeEnqueued: true, Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.True(t, rows[0].Enqueued)
+	assert.Equal(t, itemsdb.SourceAuto, rows[0].EnqueueSource)
 }
 
 func TestExportItems_ReturnsAll(t *testing.T) {
