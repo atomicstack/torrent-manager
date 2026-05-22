@@ -249,13 +249,16 @@ func processItem(ctx context.Context, cfg Config, hc *http.Client, feedCookie st
 	if dir, ok := savedir.Derive(savedir.Roots{TV: cfg.Roots.TV, Movies: cfg.Roots.Movies}, rule, it.Title); ok {
 		saveDir = dir
 	} else if rule.Category == "tv" {
-		if cfg.AnthropicKey != "" {
+		switch {
+		case cfg.Roots.TV == "":
+			slog.Warn("tv_save_dir_skipped_no_root", "title", it.Title, "rule", rule.Name)
+		case cfg.AnthropicKey != "":
 			if show, season := resolveShowSeasonAI(ctx, cfg, it.Title, rule, r); show != "" && season > 0 {
 				saveDir = filepath.Join(cfg.Roots.TV, show, fmt.Sprintf("season%d", season))
 			} else {
 				slog.Warn("tv_save_dir_skipped", "title", it.Title, "rule", rule.Name)
 			}
-		} else {
+		default:
 			slog.Warn("tv_save_dir_skipped", "title", it.Title, "rule", rule.Name)
 		}
 	}
