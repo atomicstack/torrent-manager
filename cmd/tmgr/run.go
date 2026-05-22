@@ -35,11 +35,9 @@ type Feed struct {
 	TitleExtract *regexp.Regexp
 }
 
-// Roots holds the base filesystem paths for each media category.
-type Roots struct {
-	TV     string
-	Movies string
-}
+// Roots aliases savedir.Roots so cmd/tmgr config keeps using the bare name
+// while sharing a single source of truth with the shared package.
+type Roots = savedir.Roots
 
 // Mode controls how far the pipeline runs for each matched item. Use it as a
 // safety throttle while bringing the deployment up.
@@ -246,7 +244,7 @@ func processItem(ctx context.Context, cfg Config, hc *http.Client, feedCookie st
 
 	// compute save directory based on category
 	saveDir := ""
-	if dir, ok := savedir.Derive(savedir.Roots{TV: cfg.Roots.TV, Movies: cfg.Roots.Movies}, rule, it.Title); ok {
+	if dir, ok := savedir.Derive(cfg.Roots, rule, it.Title); ok {
 		saveDir = dir
 	} else if rule.Category == "tv" {
 		switch {
