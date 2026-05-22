@@ -1,0 +1,271 @@
+// Package itemsdb is the seedctl-side persistence layer for RSS-discovered
+// torrents and enqueue history. It owns the sqlite file at
+// /home/seedbox/etc/seedctl/items.db in production. Schema migrations are
+// idempotent — Open is safe to call on every process start.
+//
+// The database is goroutine-safe via database/sql's connection pool.
+// A small number of triggers keep items_fts (an FTS5 virtual table indexing
+// title only) in sync with items so callers can do full-text search without
+// maintaining the index themselves.
+package itemsdb
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"strings"
+	"time"
+
+	_ "github.com/mattn/go-sqlite3"
+)
+
+// Item is one RSS-discovered torrent record.
+type Item struct {
+	ID            int64
+	FeedName      string
+	GUID          string
+	Title         string
+	Link          string
+	Enclosure     string
+	InfoHash      string // empty when unknown
+	MatchedRule   string // empty when no rule matched
+	FirstSeenAt   time.Time
+	LastSeenAt    time.Time
+	Enqueued      bool   // populated by List; true if there's a matching row in enqueues
+	EnqueueSource string // 'auto' | 'manual' | '' when Enqueued = false
+}
+
+// Enqueue is one row of the enqueues history table.
+type Enqueue struct {
+	InfoHash   string
+	FeedName   string
+	GUID       string
+	Title      string
+	SaveDir    string
+	Source     string // 'auto' | 'manual'
+	EnqueuedAt time.Time
+}
+
+// ListQuery parameters for List.
+type ListQuery struct {
+	Q               string // fts5 query string; empty = list by recency
+	Feed            string // exact feed_name match; empty = all feeds
+	IncludeEnqueued bool   // false = hide items present in `enqueues`
+	Limit           int    // 0 = 100 default
+	Offset          int
+}
+
+// DB wraps a *sql.DB with a typed surface. Safe for concurrent use.
+type DB struct {
+	db *sql.DB
+}
+
+// Open opens (or creates + migrates) the items database at path.
+func Open(path string) (*DB, error) {
+	// WAL + busy timeout so writers don't immediately fail under read contention.
+	dsn := path + "?_journal=WAL&_busy_timeout=5000&_foreign_keys=on"
+	sdb, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite: %w", err)
+	}
+	if err := sdb.Ping(); err != nil {
+		_ = sdb.Close()
+		return nil, fmt.Errorf("ping sqlite: %w", err)
+	}
+	if _, err := sdb.Exec(schemaSQL); err != nil {
+		_ = sdb.Close()
+		return nil, fmt.Errorf("apply schema: %w", err)
+	}
+	return &DB{db: sdb}, nil
+}
+
+// Close releases the underlying connection pool.
+func (d *DB) Close() error { return d.db.Close() }
+
+const schemaSQL = `
+CREATE TABLE IF NOT EXISTS items (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  feed_name      TEXT NOT NULL,
+  guid           TEXT NOT NULL,
+  title          TEXT NOT NULL,
+  link           TEXT,
+  enclosure      TEXT,
+  info_hash      TEXT,
+  matched_rule   TEXT,
+  first_seen_at  INTEGER NOT NULL,
+  last_seen_at   INTEGER NOT NULL,
+  UNIQUE(feed_name, guid)
+);
+CREATE INDEX IF NOT EXISTS items_hash     ON items(info_hash);
+CREATE INDEX IF NOT EXISTS items_lastseen ON items(last_seen_at DESC);
+CREATE INDEX IF NOT EXISTS items_feed     ON items(feed_name);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS items_fts USING fts5(
+  title,
+  content='items',
+  content_rowid='id',
+  tokenize='porter unicode61'
+);
+
+CREATE TRIGGER IF NOT EXISTS items_ai AFTER INSERT ON items BEGIN
+  INSERT INTO items_fts(rowid, title) VALUES (new.id, new.title);
+END;
+CREATE TRIGGER IF NOT EXISTS items_ad AFTER DELETE ON items BEGIN
+  INSERT INTO items_fts(items_fts, rowid, title) VALUES('delete', old.id, old.title);
+END;
+CREATE TRIGGER IF NOT EXISTS items_au AFTER UPDATE OF title ON items BEGIN
+  INSERT INTO items_fts(items_fts, rowid, title) VALUES('delete', old.id, old.title);
+  INSERT INTO items_fts(rowid, title) VALUES (new.id, new.title);
+END;
+
+CREATE TABLE IF NOT EXISTS enqueues (
+  info_hash    TEXT PRIMARY KEY,
+  feed_name    TEXT, guid TEXT,
+  title        TEXT, save_dir TEXT,
+  source       TEXT NOT NULL,
+  enqueued_at  INTEGER NOT NULL
+);
+`
+
+// Upsert inserts items, or updates last_seen_at + mutable fields on conflict.
+// All rows go through one transaction so fts5 triggers stay consistent.
+func (d *DB) Upsert(ctx context.Context, items []Item) error {
+	if len(items) == 0 {
+		return nil
+	}
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.PrepareContext(ctx, `
+INSERT INTO items (feed_name, guid, title, link, enclosure, info_hash, matched_rule, first_seen_at, last_seen_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(feed_name, guid) DO UPDATE SET
+  title        = excluded.title,
+  link         = excluded.link,
+  enclosure    = excluded.enclosure,
+  info_hash    = COALESCE(excluded.info_hash, items.info_hash),
+  matched_rule = COALESCE(excluded.matched_rule, items.matched_rule),
+  last_seen_at = excluded.last_seen_at
+`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, it := range items {
+		if _, err := stmt.ExecContext(ctx,
+			it.FeedName, it.GUID, it.Title, it.Link, it.Enclosure,
+			nullableString(it.InfoHash), nullableString(it.MatchedRule),
+			it.FirstSeenAt.Unix(), it.LastSeenAt.Unix(),
+		); err != nil {
+			return fmt.Errorf("upsert (%s, %s): %w", it.FeedName, it.GUID, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// List returns items matching the query. Ordering: bm25 when Q != "", else
+// last_seen_at desc. Limit defaults to 100.
+func (d *DB) List(ctx context.Context, q ListQuery) ([]Item, error) {
+	if q.Limit <= 0 {
+		q.Limit = 100
+	}
+	var (
+		where []string
+		args  []any
+		join  string
+		order string
+	)
+	if q.Q != "" {
+		join = "JOIN items_fts f ON f.rowid = i.id"
+		where = append(where, "items_fts MATCH ?")
+		args = append(args, fts5Query(q.Q))
+		order = "bm25(items_fts), i.last_seen_at DESC"
+	} else {
+		order = "i.last_seen_at DESC"
+	}
+	if q.Feed != "" {
+		where = append(where, "i.feed_name = ?")
+		args = append(args, q.Feed)
+	}
+	if !q.IncludeEnqueued {
+		where = append(where, "(i.info_hash IS NULL OR NOT EXISTS (SELECT 1 FROM enqueues e WHERE e.info_hash = i.info_hash))")
+	}
+	whereSQL := ""
+	if len(where) > 0 {
+		whereSQL = "WHERE " + strings.Join(where, " AND ")
+	}
+	query := fmt.Sprintf(`
+SELECT i.id, i.feed_name, i.guid, i.title,
+       COALESCE(i.link, ''), COALESCE(i.enclosure, ''),
+       COALESCE(i.info_hash, ''), COALESCE(i.matched_rule, ''),
+       i.first_seen_at, i.last_seen_at,
+       CASE WHEN i.info_hash IS NOT NULL AND EXISTS (SELECT 1 FROM enqueues e WHERE e.info_hash = i.info_hash) THEN 1 ELSE 0 END AS enqueued,
+       COALESCE((SELECT source FROM enqueues e WHERE e.info_hash = i.info_hash), '') AS enq_source
+FROM items i %s %s ORDER BY %s LIMIT ? OFFSET ?
+`, join, whereSQL, order)
+	args = append(args, q.Limit, q.Offset)
+	rows, err := d.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list query: %w", err)
+	}
+	defer rows.Close()
+	var out []Item
+	for rows.Next() {
+		var it Item
+		var first, last int64
+		var enqueued int
+		if err := rows.Scan(&it.ID, &it.FeedName, &it.GUID, &it.Title,
+			&it.Link, &it.Enclosure,
+			&it.InfoHash, &it.MatchedRule,
+			&first, &last, &enqueued, &it.EnqueueSource); err != nil {
+			return nil, err
+		}
+		it.FirstSeenAt = time.Unix(first, 0)
+		it.LastSeenAt = time.Unix(last, 0)
+		it.Enqueued = enqueued == 1
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
+// Export dumps every row (used for tmgr bootstrap when its local mirror is empty).
+func (d *DB) Export(ctx context.Context) ([]Item, error) {
+	return d.List(ctx, ListQuery{IncludeEnqueued: true, Limit: 1 << 30})
+}
+
+// RecordEnqueue inserts (or replaces) an enqueues row.
+func (d *DB) RecordEnqueue(ctx context.Context, e Enqueue) error {
+	_, err := d.db.ExecContext(ctx, `
+INSERT INTO enqueues (info_hash, feed_name, guid, title, save_dir, source, enqueued_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(info_hash) DO UPDATE SET
+  save_dir    = excluded.save_dir,
+  source      = excluded.source,
+  enqueued_at = excluded.enqueued_at
+`, e.InfoHash, e.FeedName, e.GUID, e.Title, e.SaveDir, e.Source, e.EnqueuedAt.Unix())
+	return err
+}
+
+func nullableString(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+// fts5Query wraps each bare token in a prefix wildcard so the user can type
+// partial words. Tokens that already contain fts5 operators are passed through.
+func fts5Query(s string) string {
+	parts := strings.Fields(s)
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if strings.ContainsAny(p, `"*():`) {
+			out = append(out, p)
+			continue
+		}
+		out = append(out, p+"*")
+	}
+	return strings.Join(out, " ")
+}
