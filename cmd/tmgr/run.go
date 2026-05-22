@@ -12,14 +12,13 @@ import (
 	"net/http"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"time"
-	"unicode"
 
 	"github.com/atomicstack/torrent-manager/internal/aiclassify"
 	"github.com/atomicstack/torrent-manager/internal/api"
 	"github.com/atomicstack/torrent-manager/internal/feed"
 	"github.com/atomicstack/torrent-manager/internal/hashcache"
+	"github.com/atomicstack/torrent-manager/internal/savedir"
 	"github.com/atomicstack/torrent-manager/internal/torrent"
 )
 
@@ -247,21 +246,17 @@ func processItem(ctx context.Context, cfg Config, hc *http.Client, feedCookie st
 
 	// compute save directory based on category
 	saveDir := ""
-	switch rule.Category {
-	case "tv":
-		if cfg.Roots.TV == "" {
-			slog.Warn("tv_save_dir_skipped_no_root", "title", it.Title, "rule", rule.Name)
-			break
-		}
-		show, season := resolveShowSeason(ctx, cfg, it.Title, rule, r)
-		if show != "" && season > 0 {
-			saveDir = filepath.Join(cfg.Roots.TV, show, fmt.Sprintf("season%d", season))
+	if dir, ok := savedir.Derive(savedir.Roots{TV: cfg.Roots.TV, Movies: cfg.Roots.Movies}, rule, it.Title); ok {
+		saveDir = dir
+	} else if rule.Category == "tv" {
+		if cfg.AnthropicKey != "" {
+			if show, season := resolveShowSeasonAI(ctx, cfg, it.Title, rule, r); show != "" && season > 0 {
+				saveDir = filepath.Join(cfg.Roots.TV, show, fmt.Sprintf("season%d", season))
+			} else {
+				slog.Warn("tv_save_dir_skipped", "title", it.Title, "rule", rule.Name)
+			}
 		} else {
 			slog.Warn("tv_save_dir_skipped", "title", it.Title, "rule", rule.Name)
-		}
-	case "movies":
-		if cfg.Roots.Movies != "" {
-			saveDir = cfg.Roots.Movies
 		}
 	}
 
@@ -358,21 +353,14 @@ func logTorrentInspect(title string, b []byte) {
 		"roots", md.Roots)
 }
 
-// resolveShowSeason returns the show subdirectory name + season number for a TV item.
-// Order:
-//  1. season from regex (feed.ExtractSeason); show from rule.Directory (or normalised rule.Name)
-//  2. if regex fails AND cfg.AnthropicKey is set: try claude (records timing + counters on r)
-//  3. otherwise return ("", 0) — caller logs + skips dir override
-func resolveShowSeason(ctx context.Context, cfg Config, title string, rule feed.ShowRule, r *RunResult) (string, int) {
+// resolveShowSeasonAI returns the show subdirectory name + season number for a
+// TV item by asking claude. savedir.Derive already attempted the regex-extract
+// fast path; this is only called when that failed AND cfg.AnthropicKey is set.
+// Records timing + counters on r.
+func resolveShowSeasonAI(ctx context.Context, cfg Config, title string, rule feed.ShowRule, r *RunResult) (string, int) {
 	show := rule.Directory
 	if show == "" {
-		show = normaliseShow(rule.Name)
-	}
-	if season, ok := feed.ExtractSeason(title); ok {
-		return show, season
-	}
-	if cfg.AnthropicKey == "" {
-		return "", 0
+		show = savedir.NormaliseShow(rule.Name)
 	}
 	slog.Info("aiclassify_start", "title", title, "rule", rule.Name)
 	aiStart := time.Now()
@@ -398,27 +386,6 @@ func resolveShowSeason(ctx context.Context, cfg Config, title string, rule feed.
 		show = res.Show
 	}
 	return show, res.Season
-}
-
-// normaliseShow converts a human show name to lowercase dot-separated form.
-// Non-alphanumeric runs are collapsed to a single dot; leading/trailing dots
-// are trimmed.
-func normaliseShow(s string) string {
-	var b strings.Builder
-	inSep := true // start true so leading separators are trimmed
-	for _, r := range strings.ToLower(s) {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			b.WriteRune(r)
-			inSep = false
-		} else {
-			if !inSep {
-				b.WriteByte('.')
-				inSep = true
-			}
-		}
-	}
-	result := b.String()
-	return strings.TrimRight(result, ".")
 }
 
 // fetchBytes downloads a public URL (a torrent file from a tracker). It
