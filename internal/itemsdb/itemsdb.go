@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -32,8 +33,18 @@ type Item struct {
 	FirstSeenAt   time.Time
 	LastSeenAt    time.Time
 	Enqueued      bool   // populated by List; true if there's a matching row in enqueues
-	EnqueueSource string // 'auto' | 'manual' | '' when Enqueued = false
+	EnqueueSource Source // SourceAuto | SourceManual | '' when Enqueued = false
 }
+
+// Source identifies which code path recorded an enqueue. The empty value is
+// not valid for RecordEnqueue but is returned by List for items that have no
+// enqueues row.
+type Source string
+
+const (
+	SourceAuto   Source = "auto"
+	SourceManual Source = "manual"
+)
 
 // Enqueue is one row of the enqueues history table.
 type Enqueue struct {
@@ -42,7 +53,7 @@ type Enqueue struct {
 	GUID       string
 	Title      string
 	SaveDir    string
-	Source     string // 'auto' | 'manual'
+	Source     Source
 	EnqueuedAt time.Time
 }
 
@@ -72,6 +83,10 @@ func Open(path string) (*DB, error) {
 		_ = sdb.Close()
 		return nil, fmt.Errorf("ping sqlite: %w", err)
 	}
+	// serialise writers through a single connection so concurrent Upsert callers
+	// can't race on the wal write lock and hit SQLITE_BUSY in spite of the busy
+	// timeout. write throughput here is in the low hundreds of rows per tick.
+	sdb.SetMaxOpenConns(1)
 	if _, err := sdb.Exec(schemaSQL); err != nil {
 		_ = sdb.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
@@ -154,6 +169,12 @@ ON CONFLICT(feed_name, guid) DO UPDATE SET
 	}
 	defer stmt.Close()
 	for _, it := range items {
+		// reject zero timestamps so an accidentally-uninitialised caller can't
+		// silently park epoch-0 in first_seen_at (which then never recovers,
+		// since the ON CONFLICT path deliberately leaves first_seen_at alone).
+		if it.FirstSeenAt.IsZero() || it.LastSeenAt.IsZero() {
+			return fmt.Errorf("upsert (%s, %s): FirstSeenAt and LastSeenAt are required", it.FeedName, it.GUID)
+		}
 		if _, err := stmt.ExecContext(ctx,
 			it.FeedName, it.GUID, it.Title, it.Link, it.Enclosure,
 			nullableString(it.InfoHash), nullableString(it.MatchedRule),
@@ -255,16 +276,18 @@ func nullableString(s string) any {
 	return s
 }
 
-// fts5Query wraps each bare token in a prefix wildcard so the user can type
-// partial words. Tokens that already contain fts5 operators are passed through.
+// fts5Query turns a user-typed search string into an FTS5 MATCH expression.
+// Splits on anything FTS5's unicode61 tokenizer treats as a word boundary
+// (whitespace, hyphen, dot, etc.) and wraps each surviving token with a
+// trailing prefix wildcard, so typing `web-dl` or `guy mo` both work. This
+// deliberately does not expose FTS5's operator syntax — the consumer is a
+// mobile search box, not a query DSL.
 func fts5Query(s string) string {
-	parts := strings.Fields(s)
+	parts := strings.FieldsFunc(s, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
 	out := make([]string, 0, len(parts))
 	for _, p := range parts {
-		if strings.ContainsAny(p, `"*():`) {
-			out = append(out, p)
-			continue
-		}
 		out = append(out, p+"*")
 	}
 	return strings.Join(out, " ")

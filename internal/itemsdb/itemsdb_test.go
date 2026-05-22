@@ -58,6 +58,17 @@ func TestList_FTS5SearchByPrefix(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Contains(t, got[0].Title, "Hard Quiz")
+
+	// hyphenated tokens (e.g. "WEB-DL") must not be sent to fts5 with a
+	// dangling prefix wildcard — that would parse as "WEB MINUS DL*" and
+	// return wrong/empty results. The token should pass through verbatim.
+	require.NoError(t, db.Upsert(ctx, []itemsdb.Item{
+		{FeedName: "TrackerA (TV)", GUID: "4", Title: "Foo S01E01 1080p WEB-DL", FirstSeenAt: now, LastSeenAt: now},
+	}))
+	got, err = db.List(ctx, itemsdb.ListQuery{Q: "WEB-DL", IncludeEnqueued: true, Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Contains(t, got[0].Title, "WEB-DL")
 }
 
 func TestList_FeedFilter(t *testing.T) {
@@ -97,7 +108,7 @@ func TestList_ExcludeEnqueuedHidesRecorded(t *testing.T) {
 	}))
 	require.NoError(t, db.RecordEnqueue(ctx, itemsdb.Enqueue{
 		InfoHash: "BBBB2222BBBB2222BBBB2222BBBB2222BBBB2222",
-		FeedName: "f", GUID: "2", Title: "hidden", SaveDir: "", Source: "auto", EnqueuedAt: now,
+		FeedName: "f", GUID: "2", Title: "hidden", SaveDir: "", Source: itemsdb.SourceAuto, EnqueuedAt: now,
 	}))
 	got, err := db.List(ctx, itemsdb.ListQuery{IncludeEnqueued: false, Limit: 10})
 	require.NoError(t, err)
@@ -117,7 +128,7 @@ func TestList_ExcludeEnqueuedHidesRecorded(t *testing.T) {
 		}
 	}
 	assert.True(t, hiddenRow.Enqueued)
-	assert.Equal(t, "auto", hiddenRow.EnqueueSource)
+	assert.Equal(t, itemsdb.SourceAuto, hiddenRow.EnqueueSource)
 }
 
 func TestRecordEnqueue_Idempotent(t *testing.T) {
@@ -128,7 +139,7 @@ func TestRecordEnqueue_Idempotent(t *testing.T) {
 		InfoHash:   "AABBCCDDEEFF11223344556677889900AABBCCDD",
 		FeedName:   "f", GUID: "g",
 		Title:      "x", SaveDir: "/t",
-		Source:     "auto", EnqueuedAt: now,
+		Source:     itemsdb.SourceAuto, EnqueuedAt: now,
 	}
 	require.NoError(t, db.RecordEnqueue(ctx, e))
 	require.NoError(t, db.RecordEnqueue(ctx, e)) // dup -> upsert, no error
