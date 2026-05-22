@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/atomicstack/torrent-manager/internal/api"
+	"github.com/atomicstack/torrent-manager/internal/itemsdb"
 	"github.com/atomicstack/torrent-manager/internal/rtorrent"
 )
 
@@ -20,16 +24,20 @@ type rtorrentClient interface {
 }
 
 type handler struct {
-	c rtorrentClient
+	c     rtorrentClient
+	items *itemsdb.DB
 }
 
-func newHandler(c rtorrentClient) http.Handler {
+func newHandler(c rtorrentClient, items *itemsdb.DB) http.Handler {
 	mux := http.NewServeMux()
-	h := &handler{c: c}
+	h := &handler{c: c, items: items}
 	mux.HandleFunc("GET /healthz", h.healthz)
 	mux.HandleFunc("GET /v1/torrents", h.listTorrents)
 	mux.HandleFunc("GET /v1/torrents/{hash}", h.getTorrent)
 	mux.HandleFunc("POST /v1/torrents", h.postTorrent)
+	mux.HandleFunc("POST /v1/items", h.upsertItems)
+	mux.HandleFunc("GET /v1/items", h.listItems)
+	mux.HandleFunc("GET /v1/items/export", h.exportItems)
 	return mux
 }
 
@@ -96,6 +104,84 @@ func (h *handler) postTorrent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, api.AddTorrentResponse{InfoHash: gotHash, Added: true})
+}
+
+func (h *handler) upsertItems(w http.ResponseWriter, r *http.Request) {
+	var req api.ItemsUpsertRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	rows := make([]itemsdb.Item, 0, len(req.Items))
+	for _, it := range req.Items {
+		rows = append(rows, itemsdb.Item{
+			FeedName:    it.FeedName,
+			GUID:        it.GUID,
+			Title:       it.Title,
+			Link:        it.Link,
+			Enclosure:   it.Enclosure,
+			InfoHash:    it.InfoHash,
+			MatchedRule: it.MatchedRule,
+			FirstSeenAt: time.Unix(it.FirstSeenAt, 0),
+			LastSeenAt:  time.Unix(it.LastSeenAt, 0),
+		})
+	}
+	if err := h.items.Upsert(r.Context(), rows); err != nil {
+		slog.Error("upsert items", "err", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, api.ItemsUpsertResponse{Upserted: len(rows)})
+}
+
+func (h *handler) listItems(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	rows, err := h.items.List(r.Context(), itemsdb.ListQuery{
+		Q:               q.Get("q"),
+		Feed:            q.Get("feed"),
+		IncludeEnqueued: q.Get("include_enqueued") == "1",
+		Limit:           limit,
+		Offset:          offset,
+	})
+	if err != nil {
+		slog.Error("list items", "err", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, api.ItemsListResponse{Items: itemRowsToRecords(rows)})
+}
+
+func (h *handler) exportItems(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.items.Export(r.Context())
+	if err != nil {
+		slog.Error("export items", "err", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, api.ItemsListResponse{Items: itemRowsToRecords(rows)})
+}
+
+func itemRowsToRecords(in []itemsdb.Item) []api.ItemRecord {
+	out := make([]api.ItemRecord, 0, len(in))
+	for _, it := range in {
+		out = append(out, api.ItemRecord{
+			ID:            it.ID,
+			FeedName:      it.FeedName,
+			GUID:          it.GUID,
+			Title:         it.Title,
+			Link:          it.Link,
+			Enclosure:     it.Enclosure,
+			InfoHash:      it.InfoHash,
+			MatchedRule:   it.MatchedRule,
+			FirstSeenAt:   it.FirstSeenAt.Unix(),
+			LastSeenAt:    it.LastSeenAt.Unix(),
+			Enqueued:      it.Enqueued,
+			EnqueueSource: string(it.EnqueueSource),
+		})
+	}
+	return out
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

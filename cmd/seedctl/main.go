@@ -12,15 +12,17 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/atomicstack/torrent-manager/internal/itemsdb"
 	"github.com/atomicstack/torrent-manager/internal/rtorrent"
 	"github.com/atomicstack/torrent-manager/internal/tlsx"
 	"gopkg.in/yaml.v3"
 )
 
 type config struct {
-	Listen string `yaml:"listen"` // e.g. "0.0.0.0:18443"
-	SCGI   string `yaml:"scgi"`   // e.g. "127.0.0.1:5059"
-	TLS    struct {
+	Listen  string `yaml:"listen"`   // e.g. "0.0.0.0:18443"
+	SCGI    string `yaml:"scgi"`     // e.g. "127.0.0.1:5059"
+	ItemsDB string `yaml:"items_db"` // sqlite path; defaults to /home/seedbox/etc/seedctl/items.db
+	TLS     struct {
 		CAFile   string `yaml:"ca_file"`
 		CertFile string `yaml:"cert_file"`
 		KeyFile  string `yaml:"key_file"`
@@ -36,6 +38,9 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	if cfg.ItemsDB == "" {
+		cfg.ItemsDB = "/home/seedbox/etc/seedctl/items.db"
+	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
@@ -47,9 +52,16 @@ func main() {
 	}
 
 	client := rtorrent.NewClient(cfg.SCGI)
+	items, err := itemsdb.Open(cfg.ItemsDB)
+	if err != nil {
+		logger.Error("open items db", "path", cfg.ItemsDB, "err", err)
+		os.Exit(1)
+	}
+	defer func() { _ = items.Close() }()
+
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           withLogging(newHandler(client)),
+		Handler:           withLogging(newHandler(client, items)),
 		TLSConfig:         tlsCfg,
 		ReadHeaderTimeout: 10 * time.Second,
 	}

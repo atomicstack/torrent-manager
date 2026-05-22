@@ -17,7 +17,7 @@ build-tmgr: ## build tmgr (cross-compile arm64 for k3s)
 
 build-seedctl: ## build seedctl (cross-compile amd64 for the seedbox)
 	mkdir -p dist
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o dist/seedctl-linux-amd64 ./cmd/seedctl
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build -tags=sqlite_fts5 -o dist/seedctl-linux-amd64 ./cmd/seedctl
 
 test: ## run unit tests
 	go test -tags=sqlite_fts5 -race ./...
