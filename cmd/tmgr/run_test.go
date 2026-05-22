@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/atomicstack/torrent-manager/internal/api"
 	"github.com/atomicstack/torrent-manager/internal/feed"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -340,9 +342,14 @@ func TestRun_ObserveMode(t *testing.T) {
 	}))
 	defer feedSrv.Close()
 
-	var seedctlHits int32
+	var pipelineHits int32 // torrent-pipeline hits (excludes /v1/items snapshot upsert)
 	seedctl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seedctlHits++
+		// the per-tick items upsert is unrelated to the torrent pipeline; allow it.
+		if r.URL.Path == "/v1/items" {
+			w.WriteHeader(200)
+			return
+		}
+		pipelineHits++
 		http.Error(w, "must not be called", 500)
 	}))
 	defer seedctl.Close()
@@ -366,7 +373,7 @@ func TestRun_ObserveMode(t *testing.T) {
 	assert.Equal(t, 0, res.Queried, "must not query seedctl in observe mode")
 	assert.Equal(t, 0, res.Added)
 	assert.Zero(t, torrentDownloadHits, "must not download torrent bytes in observe mode")
-	assert.Zero(t, seedctlHits, "must not contact seedctl in observe mode")
+	assert.Zero(t, pipelineHits, "must not touch torrent pipeline in observe mode")
 }
 
 // TestRun_FetchMode verifies that fetch mode performs the dedup-check against
@@ -397,6 +404,9 @@ func TestRun_FetchMode(t *testing.T) {
 		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/v1/torrents/"):
 			gets++
 			http.Error(w, "nf", 404) // not yet present
+		case r.Method == "POST" && r.URL.Path == "/v1/items":
+			// per-tick rss snapshot upsert — unrelated to the torrent pipeline.
+			w.WriteHeader(200)
 		case r.Method == "POST":
 			posts++
 			http.Error(w, "must not POST in fetch mode", 500)
@@ -538,4 +548,38 @@ func TestRun_FeedLogsUseName(t *testing.T) {
 	logged := buf.String()
 	assert.Contains(t, logged, "my-named-feed", "error log should contain the feed name")
 	assert.NotContains(t, logged, feedSrv.URL, "error log should not contain the raw URL when a name is set")
+}
+
+// TestPostItems_PostsBatch verifies that postItems serialises the request body
+// as json and POSTs it to /v1/items with the right content-type.
+func TestPostItems_PostsBatch(t *testing.T) {
+	var got api.ItemsUpsertRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/items" {
+			http.Error(w, "404", 404)
+			return
+		}
+		if r.Method != "POST" {
+			http.Error(w, "405", 405)
+			return
+		}
+		require.Equal(t, "application/json", r.Header.Get("Content-Type"))
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+	err := postItems(context.Background(), srv.Client(), srv.URL, []api.ItemRecord{
+		{FeedName: "TrackerA (TV)", GUID: "g1", Title: "Foo"},
+	})
+	require.NoError(t, err)
+	require.Len(t, got.Items, 1)
+	assert.Equal(t, "g1", got.Items[0].GUID)
+}
+
+// TestPostItems_EmptyIsNoOp confirms postItems short-circuits on an empty
+// batch and never touches the network.
+func TestPostItems_EmptyIsNoOp(t *testing.T) {
+	// a nil http.Client would crash on a real call; this proves we short-circuit.
+	err := postItems(context.Background(), nil, "http://invalid.invalid", nil)
+	require.NoError(t, err)
 }

@@ -144,6 +144,12 @@ func Run(ctx context.Context, cfg Config, hc *http.Client) (RunResult, error) {
 		}
 	}
 
+	// snapshot of every rss item seen across all feeds this tick. server-side
+	// upsert keyed on (feed_name, guid); first_seen_at is only set on initial
+	// insert. capture now() once and reuse for every record this tick.
+	records := make([]api.ItemRecord, 0, 256)
+	tickNow := time.Now().Unix()
+
 	for _, f := range cfg.Feeds {
 		feedLabel := f.Name
 		if feedLabel == "" {
@@ -168,12 +174,27 @@ func Run(ctx context.Context, cfg Config, hc *http.Client) (RunResult, error) {
 		for _, it := range items {
 			it.Title = extractTitle(f.TitleExtract, it.Title)
 			rule, ok := feed.Match(it.Title, feedLabel, cfg.Shows)
+			matchedRuleName := ""
+			if ok {
+				matchedRuleName = rule.Name
+			}
+			hashFromFeed, _ := feed.ExtractHash(it)
+			records = append(records, api.ItemRecord{
+				FeedName:    feedLabel,
+				GUID:        it.GUID,
+				Title:       it.Title,
+				Link:        it.Link,
+				Enclosure:   it.Enclosure,
+				InfoHash:    hashFromFeed,
+				MatchedRule: matchedRuleName,
+				FirstSeenAt: tickNow,
+				LastSeenAt:  tickNow,
+			})
 			if !ok {
 				slog.Debug("item_no_match", "feed", feedLabel, "title", it.Title)
 				continue
 			}
 			r.Matched++
-			hashFromFeed, _ := feed.ExtractHash(it)
 			slog.Info("item_matched",
 				"feed", feedLabel, "title", it.Title,
 				"rule", rule.Name, "hash_from_feed", hashFromFeed)
@@ -183,6 +204,14 @@ func Run(ctx context.Context, cfg Config, hc *http.Client) (RunResult, error) {
 			}
 		}
 	}
+
+	// upload per-tick rss snapshot to seedctl. failures must not abort the run.
+	if err := postItems(ctx, hc, cfg.SeedctlURL, records); err != nil {
+		slog.Warn("items_upsert_failed", "count", len(records), "err", err)
+	} else if len(records) > 0 {
+		slog.Info("items_upsert", "count", len(records))
+	}
+
 	slog.Info("run_summary",
 		"mode", string(mode),
 		"feeds", r.Feeds, "items", r.Items, "matched", r.Matched,
@@ -428,6 +457,32 @@ func seedctlGetStatus(ctx context.Context, hc *http.Client, base, hash string) (
 	default:
 		return false, fmt.Errorf("status %d", resp.StatusCode)
 	}
+}
+
+// postItems uploads the per-tick rss snapshot to seedctl. Server-side upsert
+// keyed on (feed_name, guid); first_seen_at is only set on initial insert.
+// 30s timeout; payload is JSON; HTTP non-200 is an error.
+func postItems(ctx context.Context, hc *http.Client, base string, items []api.ItemRecord) error {
+	if len(items) == 0 {
+		return nil
+	}
+	body, err := json.Marshal(api.ItemsUpsertRequest{Items: items})
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "POST", base+"/v1/items", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := hc.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("status %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func seedctlAdd(ctx context.Context, hc *http.Client, base, hash string, body []byte, saveDir string) error {
