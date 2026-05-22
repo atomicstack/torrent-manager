@@ -33,3 +33,34 @@ type TorrentEntry struct {
 type TorrentListResponse struct {
 	Torrents []TorrentEntry `json:"torrents"`
 }
+
+// ItemRecord is a single RSS-discovered item on the wire. Times are unix seconds.
+type ItemRecord struct {
+	ID            int64  `json:"id,omitempty"`
+	FeedName      string `json:"feed_name"`
+	GUID          string `json:"guid"`
+	Title         string `json:"title"`
+	Link          string `json:"link,omitempty"`
+	Enclosure     string `json:"enclosure,omitempty"`
+	InfoHash      string `json:"info_hash,omitempty"`
+	MatchedRule   string `json:"matched_rule,omitempty"`
+	FirstSeenAt   int64  `json:"first_seen_at"`
+	LastSeenAt    int64  `json:"last_seen_at"`
+	Enqueued      bool   `json:"enqueued,omitempty"`
+	EnqueueSource string `json:"enqueue_source,omitempty"` // 'auto' | 'manual' | ''
+}
+
+// ItemsUpsertRequest is POST /v1/items's body — a batch of items to insert/update.
+type ItemsUpsertRequest struct {
+	Items []ItemRecord `json:"items"`
+}
+
+// ItemsUpsertResponse is the reply for POST /v1/items.
+type ItemsUpsertResponse struct {
+	Upserted int `json:"upserted"`
+}
+
+// ItemsListResponse is the reply for GET /v1/items and /v1/items/export.
+type ItemsListResponse struct {
+	Items []ItemRecord `json:"items"`
+}
