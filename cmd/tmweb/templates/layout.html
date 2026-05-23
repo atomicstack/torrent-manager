@@ -12,7 +12,10 @@
     <h1>torrents</h1>
     <form id="search" class="search-bar"
           hx-get="/api/search"
-          hx-trigger="input changed delay:250ms from:input[type=search], change, load"
+          hx-trigger="input changed delay:250ms from:input[type=search],
+                      change from:select,
+                      change from:input[type=checkbox],
+                      load"
           hx-target="#rows" hx-swap="innerHTML">
       <span class="search-input-wrap">
         <input id="search-q" type="search" name="q" placeholder="search by title…" autofocus>
