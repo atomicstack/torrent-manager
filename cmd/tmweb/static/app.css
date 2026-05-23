@@ -138,14 +138,9 @@ th, td {
   background: var(--border);
 }
 
-.badge-auto {
+.badge-enqueued {
   background: #0a58ca22;
   color: var(--accent);
-}
-
-.badge-manual {
-  background: #1b8a3a22;
-  color: #1b8a3a;
 }
 
 .btn-enqueue {

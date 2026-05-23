@@ -134,7 +134,7 @@ func TestIndex_ServesHTMLPage(t *testing.T) {
 
 // TestSearch_RendersTableRows hits /api/search and confirms we get back an
 // html fragment (not json) containing the upstream item's title and the
-// auto-enqueued badge.
+// enqueued badge.
 func TestSearch_RendersTableRows(t *testing.T) {
 	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(api.ItemsListResponse{Items: []api.ItemRecord{
@@ -150,7 +150,7 @@ func TestSearch_RendersTableRows(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr.Code)
 	body := rr.Body.String()
 	assert.Contains(t, body, "Search Hit")
-	assert.Contains(t, body, "badge-auto")
+	assert.Contains(t, body, "badge-enqueued")
 }
 
 // TestSearch_SeedctlErrorRendersErrorRow ensures that an unreachable

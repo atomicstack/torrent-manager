@@ -6,12 +6,12 @@
   <td class="cell-meta">
     <span class="cell-feed">{{.FeedName}}</span>
     <span class="cell-meta-sep">·</span>
-    <span class="cell-seen">{{ago .FirstSeenAt}}</span>
+    <span class="cell-seen" title="{{iso .FirstSeenAt}}">{{ago .FirstSeenAt}}</span>
   </td>
   <td class="cell-title"><a href="{{.Link}}" target="_blank" rel="noopener">{{.Title}}</a></td>
   <td class="cell-status">
     {{if .Enqueued}}
-      <span class="badge badge-{{.EnqueueSource}}">{{.EnqueueSource}}-enqueued</span>
+      <span class="badge badge-enqueued">enqueued</span>
     {{end}}
   </td>
   <td class="cell-action">

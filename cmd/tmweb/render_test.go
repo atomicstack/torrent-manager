@@ -38,7 +38,7 @@ func TestRenderRows_EmptyShowsPlaceholder(t *testing.T) {
 	assert.Contains(t, buf.String(), "no matches")
 }
 
-// TestRenderRows_EnqueuedItemHasBadge ensures an auto-enqueued item gets the
+// TestRenderRows_EnqueuedItemHasBadge ensures an enqueued item gets the
 // auto-coloured badge in the status cell.
 func TestRenderRows_EnqueuedItemHasBadge(t *testing.T) {
 	r, err := newRenderer()
@@ -49,8 +49,8 @@ func TestRenderRows_EnqueuedItemHasBadge(t *testing.T) {
 	}}))
 	body := buf.String()
 	assert.Contains(t, body, "Foo S01E01")
-	assert.Contains(t, body, `badge-auto`)
-	assert.Contains(t, body, `auto-enqueued`)
+	assert.Contains(t, body, `badge-enqueued`)
+	assert.Contains(t, body, `enqueued`)
 }
 
 // TestRenderRows_NotEnqueuedHasNoBadge ensures we don't accidentally render
@@ -77,4 +77,28 @@ func TestHumanAgo_RelativeBuckets(t *testing.T) {
 	assert.Equal(t, "2d ago", humanAgo(now-2*86400))
 	assert.Equal(t, "?", humanAgo(0))
 	assert.Equal(t, "?", humanAgo(now+60)) // future
+}
+
+// TestIsoUTC_FormatsTimestamp confirms the iso template func renders a unix
+// timestamp as RFC3339 in UTC, and that the zero value collapses to "" so
+// the title attribute disappears rather than displaying "1970-01-01T00:00:00Z".
+func TestIsoUTC_FormatsTimestamp(t *testing.T) {
+	// 2026-05-22T04:35:12Z in unix seconds
+	assert.Equal(t, "2026-05-22T04:35:12Z", isoUTC(1779424512))
+	assert.Equal(t, "", isoUTC(0))
+}
+
+// TestRenderRows_FirstSeenHasISOTooltip verifies the cell-seen span gets a
+// title attribute carrying the iso8601 timestamp so the browser surfaces the
+// exact moment on hover.
+func TestRenderRows_FirstSeenHasISOTooltip(t *testing.T) {
+	r, err := newRenderer()
+	require.NoError(t, err)
+	var buf bytes.Buffer
+	require.NoError(t, r.rows.Execute(&buf, api.ItemsListResponse{Items: []api.ItemRecord{
+		{FeedName: "TrackerA (TV)", Title: "Foo S01E01", FirstSeenAt: 1779424512, LastSeenAt: 1779424512},
+	}}))
+	body := buf.String()
+	assert.Contains(t, body, `title="2026-05-22T04:35:12Z"`,
+		"cell-seen span must carry an ISO8601 title for hover tooltip")
 }

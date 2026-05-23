@@ -25,6 +25,7 @@ var staticFS embed.FS
 // and additive — every entry expands the template surface area.
 var funcMap = template.FuncMap{
 	"ago": humanAgo,
+	"iso": isoUTC,
 }
 
 // renderer holds the parsed templates tmweb serves. layout is the full
@@ -103,6 +104,17 @@ func humanAgo(ts int64) string {
 	default:
 		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 	}
+}
+
+// isoUTC formats a unix-seconds timestamp as RFC3339 in UTC. Used as the
+// hover-tooltip text on the "first seen" cell so the user can see the exact
+// moment without leaving the table. Returns "" for the zero timestamp so the
+// title attribute disappears in that case rather than rendering "1970-01-01…".
+func isoUTC(ts int64) string {
+	if ts == 0 {
+		return ""
+	}
+	return time.Unix(ts, 0).UTC().Format(time.RFC3339)
 }
 
 // staticHandler serves the embedded static/ subtree under /static/. The

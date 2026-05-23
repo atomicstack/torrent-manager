@@ -403,7 +403,7 @@ func (h *handler) enqueueClassify(w http.ResponseWriter, req *http.Request) {
 
 // enqueueDo executes the enqueue: fetch the .torrent, compute the hash if
 // missing, POST to seedctl with the user-confirmed save_dir, then re-render
-// the table body so the row picks up its new "auto-enqueued" badge. On
+// the table body so the row picks up its new "enqueued" badge. On
 // failure we return an error row so the user sees the cause inline instead
 // of a silent no-op.
 //
