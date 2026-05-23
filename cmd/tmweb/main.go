@@ -382,6 +382,20 @@ func (h *handler) enqueueConfirm(w http.ResponseWriter, req *http.Request) {
 	h.confirmNoRule(w, req.Context(), it)
 }
 
+// confirmRuleData is what the rule-matched modal template receives. Shares
+// the partial fields the no-rule data struct exposes (Item, Category, Meta,
+// OOB) so a single _torrent_meta.html template can render the dl in both
+// modals.
+type confirmRuleData struct {
+	Item        api.ItemRecord
+	Category    string
+	SaveDir     string
+	CommonRoot  string
+	Completions []string
+	Meta        *torrentMeta
+	OOB         bool
+}
+
 // confirmRuleMatched is the original rule-matched path: re-derive the
 // save_dir from the watchlist rule and render the _confirm.html modal.
 // The save_dir is rendered relative to the common root so the user sees
@@ -394,17 +408,20 @@ func (h *handler) confirmRuleMatched(w http.ResponseWriter, ctx context.Context,
 		return
 	}
 	saveDir, _ := savedir.Derive(h.roots, *rule, it.Title)
-	if err := h.r.confirm.Execute(w, struct {
-		Item        api.ItemRecord
-		SaveDir     string
-		CommonRoot  string
-		Completions []string
-	}{
+	data := confirmRuleData{
 		Item:        it,
+		Category:    h.feedCategories[it.FeedName],
 		SaveDir:     h.stripPrefix(saveDir),
 		CommonRoot:  h.commonRoot,
 		Completions: h.collectCompletions(ctx),
-	}); err != nil {
+	}
+	// cache hit (e.g. user opened a no-rule classify earlier on the same
+	// item, or this is a re-open within the ttl) → surface size + contents
+	// rows immediately instead of waiting for the submit fetch.
+	if e, ok := h.torrents.Get(it.FeedName, it.GUID); ok {
+		data.Meta = toTorrentMeta(e.Meta)
+	}
+	if err := h.r.confirm.Execute(w, data); err != nil {
 		slog.Error("render_confirm", "err", err)
 	}
 }
@@ -497,6 +514,13 @@ func (h *handler) confirmNoRule(w http.ResponseWriter, ctx context.Context, it a
 		data.ClaudeAvailable = h.ai != nil
 	default:
 		// "other" / unknown: empty field, no icon.
+	}
+	// cache hit → surface size + contents rows on initial modal render
+	// (e.g. user already clicked ✨ for this item earlier within the ttl
+	// and is re-opening). no fetch on modal-open — only show what's
+	// already there.
+	if e, ok := h.torrents.Get(it.FeedName, it.GUID); ok {
+		data.Meta = toTorrentMeta(e.Meta)
 	}
 	if err := h.r.confirmNoRule.Execute(w, data); err != nil {
 		slog.Error("render_confirm_norule", "err", err)

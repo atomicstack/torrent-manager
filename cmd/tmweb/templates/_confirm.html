@@ -1,12 +1,7 @@
 <div class="modal-bg" hx-on:click="document.getElementById('modal').innerHTML=''">
   <div class="modal-card" onclick="event.stopPropagation()">
     <h2>enqueue</h2>
-    <dl>
-      <dt>title</dt> <dd>{{.Item.Title}}</dd>
-      <dt>feed</dt>  <dd>{{.Item.FeedName}}</dd>
-      <dt>rule</dt>  <dd>{{.Item.MatchedRule}}</dd>
-      {{if .Item.InfoHash}}<dt>info hash</dt><dd class="mono">{{.Item.InfoHash}}</dd>{{end}}
-    </dl>
+    {{template "_torrent_meta.html" .}}
     <form hx-post="/api/enqueue?feed={{.Item.FeedName | urlquery}}&guid={{.Item.GUID | urlquery}}"
           hx-include="#search"
           hx-target="#rows" hx-swap="innerHTML"

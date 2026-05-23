@@ -67,7 +67,10 @@ func newRenderer() (*renderer, error) {
 	// claude-icon block. The classify endpoint renders just the row partial
 	// for an outerHTML swap, so it gets its own template handle.
 	confirm, err := template.New("_confirm.html").Funcs(funcMap).
-		ParseFS(templatesFS, "templates/_confirm.html", "templates/_enqueue_progress.html")
+		ParseFS(templatesFS,
+			"templates/_confirm.html",
+			"templates/_torrent_meta.html",
+			"templates/_enqueue_progress.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse confirm: %w", err)
 	}
