@@ -68,6 +68,29 @@
     // htmx fires htmx:load for every newly-added subtree (each swap of #rows
     // counts), so the rewrite runs against the freshly-rendered table body.
     document.body.addEventListener('htmx:load', function (e) { rewrite(e.target); });
+
+    // press '/' anywhere to focus the search box. swallowed if a text input
+    // (or textarea / contenteditable) already has focus so typing '/' in the
+    // search box / modal save_dir field still works.
+    function isTextField(el) {
+      if (!el) return false;
+      if (el.isContentEditable) return true;
+      if (el.tagName === 'TEXTAREA') return true;
+      if (el.tagName === 'INPUT') {
+        var t = (el.type || '').toLowerCase();
+        return ['text', 'search', 'email', 'url', 'tel', 'password', 'number'].indexOf(t) >= 0;
+      }
+      return false;
+    }
+    document.addEventListener('keydown', function (e) {
+      if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (isTextField(document.activeElement)) return;
+      var q = document.getElementById('search-q');
+      if (!q) return;
+      e.preventDefault();
+      q.focus();
+      q.select();
+    });
   })();
   </script>
 </body>
