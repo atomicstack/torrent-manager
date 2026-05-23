@@ -1,6 +1,11 @@
 # config for seedctl. lives at $HOME/etc/seedctl/seedctl.yaml on the seed host.
 listen: "0.0.0.0:18443"
 scgi:   "127.0.0.1:5059"
+# allowlist: peers outside these prefixes are silently dropped after TCP accept
+# but before TLS sees any bytes. Empty list = accept everything (default).
+# allowlist:
+#   - 192.0.2.10            # home WAN /32
+#   - 2001:db8:1::/64           # home v6 /64
 tls:
   ca_file:   "/home/seedbox/etc/seedctl/ca.crt"
   cert_file: "/home/seedbox/etc/seedctl/server.crt"

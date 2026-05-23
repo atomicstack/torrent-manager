@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -24,7 +25,13 @@ type config struct {
 	Listen  string `yaml:"listen"`   // e.g. "0.0.0.0:18443"
 	SCGI    string `yaml:"scgi"`     // e.g. "127.0.0.1:5059"
 	ItemsDB string `yaml:"items_db"` // sqlite path; defaults to /home/seedbox/etc/seedctl/items.db
-	TLS     struct {
+	// Allowlist accepts CIDRs ("10.0.0.0/24", "2001:db8::/64") or bare IPs
+	// (treated as /32 v4 or /128 v6). Empty/missing list = no filter
+	// (current behaviour). Connections from non-matching peers are dropped
+	// after TCP accept but before TLS reads any bytes, so the noisy
+	// "first record does not look like a TLS handshake" scans go silent.
+	Allowlist []string `yaml:"allowlist,omitempty"`
+	TLS       struct {
 		CAFile   string `yaml:"ca_file"`
 		CertFile string `yaml:"cert_file"`
 		KeyFile  string `yaml:"key_file"`
@@ -75,10 +82,25 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	allowPrefixes, err := parseAllowlist(cfg.Allowlist)
+	if err != nil {
+		logger.Error("parse allowlist", "err", err)
+		os.Exit(1)
+	}
+	ln, err := net.Listen("tcp", cfg.Listen)
+	if err != nil {
+		logger.Error("listen", "addr", cfg.Listen, "err", err)
+		os.Exit(1)
+	}
+	wrappedLn := newAllowlistListener(ln, allowPrefixes)
+
 	go func() {
-		logger.Info("listening", "addr", cfg.Listen, "scgi", cfg.SCGI)
-		if err := srv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
-			logger.Error("listen", "err", err)
+		logger.Info("listening",
+			"addr", cfg.Listen,
+			"scgi", cfg.SCGI,
+			"allowlist_entries", len(allowPrefixes))
+		if err := srv.ServeTLS(wrappedLn, "", ""); err != nil && err != http.ErrServerClosed {
+			logger.Error("serve", "err", err)
 			os.Exit(1)
 		}
 	}()
