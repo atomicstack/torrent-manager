@@ -174,21 +174,18 @@ func (s *Seedctl) ListDirs(ctx context.Context, rootName string) (api.DirsListRe
 // the next page load ships the meta inline to the browser. Best-effort —
 // callers log and continue on error rather than failing the user-visible
 // enqueue.
-func (s *Seedctl) SetItemMeta(ctx context.Context, feed, guid, infoHash string, totalBytes int64, fileCount, dirCount int) error {
+func (s *Seedctl) SetItemMeta(ctx context.Context, req api.ItemMetaRequest) error {
 	u := s.base + "/v1/items/meta"
-	body, err := json.Marshal(api.ItemMetaRequest{
-		FeedName: feed, GUID: guid, InfoHash: infoHash,
-		TotalBytes: totalBytes, FileCount: fileCount, DirCount: dirCount,
-	})
+	body, err := json.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("seedctl POST %s: marshal: %w", u, err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
+	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("seedctl POST %s: build request: %w", u, err)
 	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := s.hc.Do(req)
+	hreq.Header.Set("Content-Type", "application/json")
+	resp, err := s.hc.Do(hreq)
 	if err != nil {
 		return fmt.Errorf("seedctl POST %s: %w", u, err)
 	}

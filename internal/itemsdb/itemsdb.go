@@ -17,7 +17,7 @@ import (
 	"time"
 	"unicode"
 
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/atomicstack/torrent-manager/internal/api"
 )
 
 // Item is one RSS-discovered torrent record.
@@ -322,17 +322,18 @@ FROM items i %s %s ORDER BY %s LIMIT ? OFFSET ?
 // load). No-op when the row doesn't exist yet — callers rely on the
 // RSS-side Upsert to land the row first.
 //
-// infoHash is optional: when non-empty, fills in items.info_hash if the
-// row is still missing it (e.g. TrackerB feeds don't carry the hash in
+// req.InfoHash is optional: when non-empty, fills in items.info_hash if
+// the row is still missing it (e.g. TrackerB feeds don't carry the hash in
 // the rss guid). Never overwrites a non-empty hash already on the row.
 //
-// FOOTGUN: total_bytes / file_count / dir_count are written unconditionally.
-// Pass the actual parsed values — passing zeros (e.g. to backfill only the
-// info_hash on an existing row) will clobber any meta already there. If you
-// only want to update one field, read the row first and re-send the rest.
-// (We deliberately don't gate on a sentinel here — the only legitimate caller
-// is the post-parse path in tmgr/tmweb which always has all four.)
-func (d *DB) SetMeta(ctx context.Context, feedName, guid, infoHash string, totalBytes int64, fileCount, dirCount int) error {
+// FOOTGUN: req.TotalBytes / FileCount / DirCount are written
+// unconditionally. Pass the actual parsed values — passing zeros (e.g.
+// to backfill only the info_hash on an existing row) will clobber any
+// meta already there. If you only want to update one field, read the
+// row first and re-send the rest. (We deliberately don't gate on a
+// sentinel here — the only legitimate caller is the post-parse path in
+// tmgr/tmweb which always has all four.)
+func (d *DB) SetMeta(ctx context.Context, req api.ItemMetaRequest) error {
 	_, err := d.db.ExecContext(ctx, `
 UPDATE items SET
   total_bytes = ?,
@@ -340,7 +341,7 @@ UPDATE items SET
   dir_count   = ?,
   info_hash   = COALESCE(NULLIF(info_hash, ''), NULLIF(?, ''))
 WHERE feed_name = ? AND guid = ?
-`, totalBytes, fileCount, dirCount, infoHash, feedName, guid)
+`, req.TotalBytes, req.FileCount, req.DirCount, req.InfoHash, req.FeedName, req.GUID)
 	return err
 }
 

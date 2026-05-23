@@ -384,7 +384,10 @@ func processItem(ctx context.Context, cfg Config, hc *http.Client, feedLabel, fe
 	// can ship size/contents inline at page load. seedctl already has the
 	// row from the rss upsert tick.
 	if md, perr := torrent.Parse(torrentBytes); perr == nil {
-		if merr := postItemMeta(ctx, hc, cfg.SeedctlURL, feedLabel, it.GUID, hash, md.TotalBytes, md.FileCount, md.DirCount()); merr != nil {
+		if merr := postItemMeta(ctx, hc, cfg.SeedctlURL, api.ItemMetaRequest{
+			FeedName: feedLabel, GUID: it.GUID, InfoHash: hash,
+			TotalBytes: md.TotalBytes, FileCount: md.FileCount, DirCount: md.DirCount(),
+		}); merr != nil {
 			slog.Warn("post_item_meta_failed", "title", it.Title, "hash", hash, "err", merr)
 		}
 	}
@@ -523,19 +526,16 @@ func postItems(ctx context.Context, hc *http.Client, base string, items []api.It
 // postItemMeta records the parsed-torrent meta on the seedctl items row so
 // the tmweb ui ships it inline on page load. Best-effort: callers log the
 // error and continue, since the actual enqueue has already succeeded.
-func postItemMeta(ctx context.Context, hc *http.Client, base, feed, guid, infoHash string, totalBytes int64, fileCount, dirCount int) error {
-	body, err := json.Marshal(api.ItemMetaRequest{
-		FeedName: feed, GUID: guid, InfoHash: infoHash,
-		TotalBytes: totalBytes, FileCount: fileCount, DirCount: dirCount,
-	})
+func postItemMeta(ctx context.Context, hc *http.Client, base string, req api.ItemMetaRequest) error {
+	body, err := json.Marshal(req)
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, "POST", base+"/v1/items/meta", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := hc.Do(req)
+	hreq, _ := http.NewRequestWithContext(ctx, "POST", base+"/v1/items/meta", bytes.NewReader(body))
+	hreq.Header.Set("Content-Type", "application/json")
+	resp, err := hc.Do(hreq)
 	if err != nil {
 		return err
 	}

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/atomicstack/torrent-manager/internal/api"
 	"github.com/atomicstack/torrent-manager/internal/itemsdb"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
@@ -205,7 +206,10 @@ func TestSetMeta_RoundTripsThroughList(t *testing.T) {
 		{FeedName: "f", GUID: "g1", Title: "with meta", FirstSeenAt: now, LastSeenAt: now},
 		{FeedName: "f", GUID: "g2", Title: "no meta", FirstSeenAt: now, LastSeenAt: now},
 	}))
-	require.NoError(t, db.SetMeta(ctx, "f", "g1", "", 1_610_612_736, 12, 3))
+	require.NoError(t, db.SetMeta(ctx, api.ItemMetaRequest{
+		FeedName: "f", GUID: "g1",
+		TotalBytes: 1_610_612_736, FileCount: 12, DirCount: 3,
+	}))
 
 	got, err := db.List(ctx, itemsdb.ListQuery{IncludeEnqueued: true, Limit: 10})
 	require.NoError(t, err)
@@ -247,8 +251,16 @@ func TestSetMeta_BackfillsInfoHashWhenMissing(t *testing.T) {
 		{FeedName: "TrackerB (Movies)", GUID: "g1", Title: "no hash from rss", FirstSeenAt: now, LastSeenAt: now},
 		{FeedName: "TrackerA (TV)", GUID: "g2", Title: "hash from rss", InfoHash: "AAAA1111AAAA1111AAAA1111AAAA1111AAAA1111", FirstSeenAt: now, LastSeenAt: now},
 	}))
-	require.NoError(t, db.SetMeta(ctx, "TrackerB (Movies)", "g1", "DEAD" + "BEEF" + "00000000000000000000000000000000", 100, 1, 0))
-	require.NoError(t, db.SetMeta(ctx, "TrackerA (TV)", "g2", "BBBB" + "2222" + "BBBB2222BBBB2222BBBB2222BBBB2222", 200, 1, 0))
+	require.NoError(t, db.SetMeta(ctx, api.ItemMetaRequest{
+		FeedName: "TrackerB (Movies)", GUID: "g1",
+		InfoHash:   "DEADBEEF00000000000000000000000000000000",
+		TotalBytes: 100, FileCount: 1, DirCount: 0,
+	}))
+	require.NoError(t, db.SetMeta(ctx, api.ItemMetaRequest{
+		FeedName: "TrackerA (TV)", GUID: "g2",
+		InfoHash:   "BBBB2222BBBB2222BBBB2222BBBB2222BBBB2222",
+		TotalBytes: 200, FileCount: 1, DirCount: 0,
+	}))
 
 	got, err := db.List(ctx, itemsdb.ListQuery{IncludeEnqueued: true, Limit: 10})
 	require.NoError(t, err)
@@ -285,7 +297,10 @@ VALUES ('f', 'g1', 't', 1, 1)`)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
-	require.NoError(t, db.SetMeta(context.Background(), "f", "g1", "", 100, 2, 1))
+	require.NoError(t, db.SetMeta(context.Background(), api.ItemMetaRequest{
+		FeedName: "f", GUID: "g1",
+		TotalBytes: 100, FileCount: 2, DirCount: 1,
+	}))
 	got, err := db.List(context.Background(), itemsdb.ListQuery{IncludeEnqueued: true, Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, got, 1)
