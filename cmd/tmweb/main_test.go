@@ -112,7 +112,7 @@ func TestIndex_ServesHTMLPage(t *testing.T) {
 		}
 		if r.URL.Path == "/v1/items" {
 			_ = json.NewEncoder(w).Encode(api.ItemsListResponse{Items: []api.ItemRecord{
-				{FeedName: "TrackerA (TV)", Title: "X", LastSeenAt: time.Now().Unix()},
+				{FeedName: "TrackerA (TV)", Title: "X", FirstSeenAt: time.Now().Unix(), LastSeenAt: time.Now().Unix()},
 			}})
 			return
 		}
@@ -138,7 +138,7 @@ func TestIndex_ServesHTMLPage(t *testing.T) {
 func TestSearch_RendersTableRows(t *testing.T) {
 	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(api.ItemsListResponse{Items: []api.ItemRecord{
-			{FeedName: "TrackerA (TV)", Title: "Search Hit", InfoHash: "DEAD", LastSeenAt: time.Now().Unix(), Enqueued: true, EnqueueSource: "auto"},
+			{FeedName: "TrackerA (TV)", Title: "Search Hit", InfoHash: "DEAD", FirstSeenAt: time.Now().Unix(), LastSeenAt: time.Now().Unix(), Enqueued: true, EnqueueSource: "auto"},
 		}})
 	}))
 	t.Cleanup(stub.Close)
@@ -246,7 +246,7 @@ func TestEnqueueConfirm_RenderModal(t *testing.T) {
 func TestEnqueueConfirm_NoRule_OtherCategory(t *testing.T) {
 	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(api.ItemsListResponse{Items: []api.ItemRecord{
-			{FeedName: "TrackerA (Other)", GUID: "g1", Title: "Random.Release.1080p", LastSeenAt: time.Now().Unix()},
+			{FeedName: "TrackerA (Other)", GUID: "g1", Title: "Random.Release.1080p", FirstSeenAt: time.Now().Unix(), LastSeenAt: time.Now().Unix()},
 		}})
 	}))
 	t.Cleanup(stub.Close)
@@ -285,7 +285,7 @@ func TestEnqueueConfirm_NoRule_TV_AutoPickFailed_RendersEditable(t *testing.T) {
 	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/items" {
 			_ = json.NewEncoder(w).Encode(api.ItemsListResponse{Items: []api.ItemRecord{
-				{FeedName: "TrackerB (TV)", GUID: "g1", Title: "Severance.S02E01.1080p", LastSeenAt: time.Now().Unix()},
+				{FeedName: "TrackerB (TV)", GUID: "g1", Title: "Severance.S02E01.1080p", FirstSeenAt: time.Now().Unix(), LastSeenAt: time.Now().Unix()},
 			}})
 			return
 		}
@@ -376,7 +376,7 @@ func TestEnqueueDo_NoRule_AcceptsFormSaveDir(t *testing.T) {
 		switch r.URL.Path {
 		case "/v1/items":
 			_ = json.NewEncoder(w).Encode(api.ItemsListResponse{Items: []api.ItemRecord{
-				{FeedName: "TrackerB (TV)", GUID: "g1", Title: "X.S01E01", Link: tracker.URL + "/.torrent", LastSeenAt: time.Now().Unix()},
+				{FeedName: "TrackerB (TV)", GUID: "g1", Title: "X.S01E01", Link: tracker.URL + "/.torrent", FirstSeenAt: time.Now().Unix(), LastSeenAt: time.Now().Unix()},
 			}})
 		case "/v1/torrents":
 			posted.hash = r.Header.Get("X-Info-Hash")
@@ -553,7 +553,7 @@ func TestEnqueueConfirm_NoRule_TV_RendersLoadingShell(t *testing.T) {
 	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/items" {
 			_ = json.NewEncoder(w).Encode(api.ItemsListResponse{Items: []api.ItemRecord{
-				{FeedName: "TrackerB (TV)", GUID: "g1", Title: "Severance.S02E01.1080p", LastSeenAt: time.Now().Unix()},
+				{FeedName: "TrackerB (TV)", GUID: "g1", Title: "Severance.S02E01.1080p", FirstSeenAt: time.Now().Unix(), LastSeenAt: time.Now().Unix()},
 			}})
 			return
 		}

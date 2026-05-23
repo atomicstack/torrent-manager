@@ -45,7 +45,7 @@ func TestRenderRows_EnqueuedItemHasBadge(t *testing.T) {
 	require.NoError(t, err)
 	var buf bytes.Buffer
 	require.NoError(t, r.rows.Execute(&buf, api.ItemsListResponse{Items: []api.ItemRecord{
-		{FeedName: "TrackerA (TV)", Title: "Foo S01E01", InfoHash: "DEADBEEF", Enqueued: true, EnqueueSource: "auto", LastSeenAt: time.Now().Unix()},
+		{FeedName: "TrackerA (TV)", Title: "Foo S01E01", InfoHash: "DEADBEEF", Enqueued: true, EnqueueSource: "auto", FirstSeenAt: time.Now().Unix(), LastSeenAt: time.Now().Unix()},
 	}}))
 	body := buf.String()
 	assert.Contains(t, body, "Foo S01E01")
@@ -60,7 +60,7 @@ func TestRenderRows_NotEnqueuedHasNoBadge(t *testing.T) {
 	require.NoError(t, err)
 	var buf bytes.Buffer
 	require.NoError(t, r.rows.Execute(&buf, api.ItemsListResponse{Items: []api.ItemRecord{
-		{FeedName: "TrackerA (TV)", Title: "Bar S01E01", LastSeenAt: time.Now().Unix()},
+		{FeedName: "TrackerA (TV)", Title: "Bar S01E01", FirstSeenAt: time.Now().Unix(), LastSeenAt: time.Now().Unix()},
 	}}))
 	body := buf.String()
 	assert.Contains(t, body, "Bar S01E01")
