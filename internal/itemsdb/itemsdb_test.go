@@ -194,3 +194,39 @@ VALUES ('f', 'g1', 't', 'L', 'E', 1, 1)`)
 	require.Len(t, got, 1)
 	assert.Equal(t, "L", got[0].Link)
 }
+
+// TestList_OrderMirrorsRSSFeed pins down the new ordering contract: items
+// from later ticks come first (newer first_seen_at), and within a single
+// tick the insertion order (which mirrors the RSS XML order tmgr iterates)
+// is preserved.
+func TestList_OrderMirrorsRSSFeed(t *testing.T) {
+	db := tmpDB(t)
+	ctx := context.Background()
+
+	// tick 1: rss had [A, B, C]. A is newest-in-feed → first inserted.
+	t1 := time.Unix(1_700_000_000, 0)
+	require.NoError(t, db.Upsert(ctx, []itemsdb.Item{
+		{FeedName: "f", GUID: "a", Title: "A", FirstSeenAt: t1, LastSeenAt: t1},
+		{FeedName: "f", GUID: "b", Title: "B", FirstSeenAt: t1, LastSeenAt: t1},
+		{FeedName: "f", GUID: "c", Title: "C", FirstSeenAt: t1, LastSeenAt: t1},
+	}))
+
+	// tick 2: rss now has [D, A, B, C]. D is newer than A,B,C.
+	t2 := t1.Add(5 * time.Minute)
+	require.NoError(t, db.Upsert(ctx, []itemsdb.Item{
+		{FeedName: "f", GUID: "d", Title: "D", FirstSeenAt: t2, LastSeenAt: t2},
+		{FeedName: "f", GUID: "a", Title: "A", FirstSeenAt: t2, LastSeenAt: t2}, // upserts; first_seen_at unchanged
+		{FeedName: "f", GUID: "b", Title: "B", FirstSeenAt: t2, LastSeenAt: t2},
+		{FeedName: "f", GUID: "c", Title: "C", FirstSeenAt: t2, LastSeenAt: t2},
+	}))
+
+	got, err := db.List(ctx, itemsdb.ListQuery{IncludeEnqueued: true, Limit: 10})
+	require.NoError(t, err)
+	titles := make([]string, 0, len(got))
+	for _, r := range got {
+		titles = append(titles, r.Title)
+	}
+	// Expected: D (only-in-tick-2, newest first_seen_at), then A B C ordered
+	// by their insertion ids (matching rss xml order from tick 1).
+	assert.Equal(t, []string{"D", "A", "B", "C"}, titles)
+}

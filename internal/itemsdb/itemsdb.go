@@ -136,7 +136,8 @@ CREATE TABLE IF NOT EXISTS items (
   UNIQUE(feed_name, guid)
 );
 CREATE INDEX IF NOT EXISTS items_hash     ON items(info_hash);
-CREATE INDEX IF NOT EXISTS items_lastseen ON items(last_seen_at DESC);
+CREATE INDEX IF NOT EXISTS items_lastseen  ON items(last_seen_at DESC);
+CREATE INDEX IF NOT EXISTS items_firstseen ON items(first_seen_at DESC, id);
 CREATE INDEX IF NOT EXISTS items_feed     ON items(feed_name);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS items_fts USING fts5(
@@ -225,9 +226,16 @@ func (d *DB) List(ctx context.Context, q ListQuery) ([]Item, error) {
 		join = "JOIN items_fts f ON f.rowid = i.id"
 		where = append(where, "items_fts MATCH ?")
 		args = append(args, fts5Query(q.Q))
-		order = "bm25(items_fts), i.last_seen_at DESC"
+		// fts5 hits ranked by relevance first; ties broken by feed order
+		// (newest tick, then RSS position within the tick — see below).
+		order = "bm25(items_fts), i.first_seen_at DESC, i.id ASC"
 	} else {
-		order = "i.last_seen_at DESC"
+		// Default order: mirror the RSS feed. first_seen_at DESC puts items
+		// from later ticks first. Within a tick (same first_seen_at) the
+		// items table id is the insertion order, which matches the RSS XML
+		// order tmgr iterates — so id ASC keeps the feed's natural ranking
+		// (newer-in-feed first because rss publishes newest items first).
+		order = "i.first_seen_at DESC, i.id ASC"
 	}
 	if q.Feed != "" {
 		where = append(where, "i.feed_name = ?")
