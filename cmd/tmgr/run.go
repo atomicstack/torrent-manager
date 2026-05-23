@@ -179,9 +179,17 @@ func Run(ctx context.Context, cfg Config, hc *http.Client) (RunResult, error) {
 				matchedRuleName = rule.Name
 			}
 			hashFromFeed, _ := feed.ExtractHash(it)
+			// some feeds (notably TrackerA/tracker-a.example) omit <guid> entirely; the
+			// items db PK is (feed_name, guid), so an empty guid collapses every
+			// item from that feed into a single row. fall back to <link>, which
+			// TrackerA exposes as a unique per-item d.php?r=<hash> URL.
+			itemGUID := it.GUID
+			if itemGUID == "" {
+				itemGUID = it.Link
+			}
 			records = append(records, api.ItemRecord{
 				FeedName:    feedLabel,
-				GUID:        it.GUID,
+				GUID:        itemGUID,
 				Title:       it.Title,
 				Link:        it.Link,
 				Enclosure:   it.Enclosure,
