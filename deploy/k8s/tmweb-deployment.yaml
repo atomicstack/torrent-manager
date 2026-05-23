@@ -33,6 +33,7 @@ spec:
             - --key=/etc/tmgr/tls/client.key
           envFrom:
             - secretRef: { name: tmgr-cookies }
+            - secretRef: { name: tmgr-anthropic }
           ports:
             - name: http
               containerPort: 8080
