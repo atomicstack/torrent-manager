@@ -1,0 +1,149 @@
+:root {
+  --fg: #111;
+  --bg: #fff;
+  --muted: #777;
+  --accent: #0a58ca;
+  --border: #ddd;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #eee;
+    --bg: #111;
+    --muted: #999;
+    --accent: #6ea8fe;
+    --border: #333;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  font: 14px/1.4 system-ui, -apple-system, sans-serif;
+  color: var(--fg);
+  background: var(--bg);
+  margin: 0;
+}
+
+header {
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  padding: 0.5rem 1rem;
+  z-index: 1;
+}
+
+header h1 {
+  font-size: 1.1rem;
+  margin: 0 0 0.5rem 0;
+}
+
+.search-bar {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.search-bar input[type=search] {
+  flex: 1 1 200px;
+  padding: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.search-bar select {
+  padding: 0.4rem;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+main { padding: 1rem; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th, td {
+  padding: 0.4rem 0.5rem;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+
+.cell-title {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  word-break: break-all;
+}
+
+.cell-title a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.cell-title a:hover { text-decoration: underline; }
+
+.cell-seen {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.badge {
+  font-size: 0.75rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  background: var(--border);
+}
+
+.badge-auto {
+  background: #0a58ca22;
+  color: var(--accent);
+}
+
+.badge-manual {
+  background: #1b8a3a22;
+  color: #1b8a3a;
+}
+
+.btn-enqueue {
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.btn-enqueue[disabled] {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.empty {
+  text-align: center;
+  color: var(--muted);
+  padding: 2rem;
+}
+
+/* mobile card layout */
+@media (max-width: 600px) {
+  table, thead, tbody, tr, td, th { display: block; }
+  thead { display: none; }
+  tr {
+    margin-bottom: 1rem;
+    padding: 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+  }
+  td { border: none; padding: 0.2rem 0; }
+  .cell-feed {
+    font-size: 0.75rem;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+}

@@ -1,0 +1,18 @@
+{{if not .Items}}
+<tr><td colspan="5" class="empty">no matches</td></tr>
+{{end}}
+{{range .Items}}
+<tr data-feed="{{.FeedName}}" data-guid="{{.GUID}}" data-hash="{{.InfoHash}}">
+  <td class="cell-feed">{{.FeedName}}</td>
+  <td class="cell-title"><a href="{{.Link}}" target="_blank" rel="noopener">{{.Title}}</a></td>
+  <td class="cell-seen">{{ago .LastSeenAt}}</td>
+  <td class="cell-status">
+    {{if .Enqueued}}
+      <span class="badge badge-{{.EnqueueSource}}">{{.EnqueueSource}}-enqueued</span>
+    {{end}}
+  </td>
+  <td class="cell-action">
+    <button class="btn-enqueue" disabled title="phase 3 will wire this">enqueue</button>
+  </td>
+</tr>
+{{end}}

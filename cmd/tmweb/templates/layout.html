@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>tmweb</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/htmx.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>torrents</h1>
+    <form id="search" class="search-bar"
+          hx-get="/api/search" hx-trigger="input changed delay:250ms from:input, change from:select, load"
+          hx-target="#rows" hx-swap="innerHTML">
+      <input type="search" name="q" placeholder="search by title…" autofocus>
+      <select name="feed">
+        <option value="">all feeds</option>
+        {{range .Feeds}}
+        <option value="{{.}}">{{.}}</option>
+        {{end}}
+      </select>
+      <label><input type="checkbox" name="include_enqueued" value="1"> include enqueued</label>
+    </form>
+  </header>
+  <main>
+    <table>
+      <thead>
+        <tr><th>feed</th><th>title</th><th>last seen</th><th>status</th><th></th></tr>
+      </thead>
+      <tbody id="rows">
+        <tr><td colspan="5" class="empty">loading…</td></tr>
+      </tbody>
+    </table>
+  </main>
+</body>
+</html>
