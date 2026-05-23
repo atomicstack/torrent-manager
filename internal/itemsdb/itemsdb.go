@@ -325,6 +325,13 @@ FROM items i %s %s ORDER BY %s LIMIT ? OFFSET ?
 // infoHash is optional: when non-empty, fills in items.info_hash if the
 // row is still missing it (e.g. TrackerB feeds don't carry the hash in
 // the rss guid). Never overwrites a non-empty hash already on the row.
+//
+// FOOTGUN: total_bytes / file_count / dir_count are written unconditionally.
+// Pass the actual parsed values — passing zeros (e.g. to backfill only the
+// info_hash on an existing row) will clobber any meta already there. If you
+// only want to update one field, read the row first and re-send the rest.
+// (We deliberately don't gate on a sentinel here — the only legitimate caller
+// is the post-parse path in tmgr/tmweb which always has all four.)
 func (d *DB) SetMeta(ctx context.Context, feedName, guid, infoHash string, totalBytes int64, fileCount, dirCount int) error {
 	_, err := d.db.ExecContext(ctx, `
 UPDATE items SET
