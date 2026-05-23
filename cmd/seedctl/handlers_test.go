@@ -31,7 +31,7 @@ func (s *stubClient) ListTorrents() ([]rtorrent.TorrentMetadata, error) {
 }
 
 func TestHealthz_OK(t *testing.T) {
-	h := newHandler(&stubClient{ping: func() (string, error) { return "0.9.8", nil }}, nil)
+	h := newHandler(&stubClient{ping: func() (string, error) { return "0.9.8", nil }}, nil, nil)
 	req := httptest.NewRequest("GET", "/healthz", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -41,7 +41,7 @@ func TestHealthz_OK(t *testing.T) {
 }
 
 func TestHealthz_RTorrentDown(t *testing.T) {
-	h := newHandler(&stubClient{ping: func() (string, error) { return "", errors.New("connection refused") }}, nil)
+	h := newHandler(&stubClient{ping: func() (string, error) { return "", errors.New("connection refused") }}, nil, nil)
 	req := httptest.NewRequest("GET", "/healthz", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -51,7 +51,7 @@ func TestHealthz_RTorrentDown(t *testing.T) {
 func TestListTorrents_Empty(t *testing.T) {
 	h := newHandler(&stubClient{list: func() ([]rtorrent.TorrentMetadata, error) {
 		return []rtorrent.TorrentMetadata{}, nil
-	}}, nil)
+	}}, nil, nil)
 	req := httptest.NewRequest("GET", "/v1/torrents", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -65,7 +65,7 @@ func TestListTorrents_Populated(t *testing.T) {
 			{Hash: "AAAA000000000000000000000000000000000000", Name: "Bobs.Burgers.S16E14.mkv"},
 			{Hash: "BBBB000000000000000000000000000000000000", Name: "Some.Movie.2024.mkv"},
 		}, nil
-	}}, nil)
+	}}, nil, nil)
 	req := httptest.NewRequest("GET", "/v1/torrents", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -79,7 +79,7 @@ func TestListTorrents_Populated(t *testing.T) {
 func TestListTorrents_Error(t *testing.T) {
 	h := newHandler(&stubClient{list: func() ([]rtorrent.TorrentMetadata, error) {
 		return nil, errors.New("scgi down")
-	}}, nil)
+	}}, nil, nil)
 	req := httptest.NewRequest("GET", "/v1/torrents", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -89,7 +89,7 @@ func TestListTorrents_Error(t *testing.T) {
 func TestGetTorrent_NotFound(t *testing.T) {
 	h := newHandler(&stubClient{status: func(string) (api.TorrentStatus, error) {
 		return api.TorrentStatus{}, rtorrent.ErrNotFound
-	}}, nil)
+	}}, nil, nil)
 	req := httptest.NewRequest("GET", "/v1/torrents/AAAA000000000000000000000000000000000000", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -99,7 +99,7 @@ func TestGetTorrent_NotFound(t *testing.T) {
 func TestGetTorrent_Found(t *testing.T) {
 	h := newHandler(&stubClient{status: func(string) (api.TorrentStatus, error) {
 		return api.TorrentStatus{InfoHash: "AAA", Name: "X", Complete: true}, nil
-	}}, nil)
+	}}, nil, nil)
 	req := httptest.NewRequest("GET", "/v1/torrents/AAA", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -120,7 +120,7 @@ func TestPostTorrent_Adds(t *testing.T) {
 		status: func(string) (api.TorrentStatus, error) {
 			return api.TorrentStatus{}, rtorrent.ErrNotFound
 		},
-	}, db)
+	}, db, nil)
 	req := httptest.NewRequest("POST", "/v1/torrents", strings.NewReader("fake-bytes"))
 	req.Header.Set("Content-Type", "application/x-bittorrent")
 	req.Header.Set("X-Info-Hash", "DEADBEEF"+strings.Repeat("0", 32))
@@ -141,7 +141,7 @@ func TestPostTorrent_Duplicate(t *testing.T) {
 			t.Fatalf("load should not be called for duplicates")
 			return "", nil
 		},
-	}, nil)
+	}, nil, nil)
 	req := httptest.NewRequest("POST", "/v1/torrents", strings.NewReader("ignored"))
 	req.Header.Set("X-Info-Hash", "DEADBEEF"+strings.Repeat("0", 32))
 	w := httptest.NewRecorder()
@@ -161,7 +161,7 @@ func TestPostTorrent_AddsWithSaveDirectory(t *testing.T) {
 		status: func(string) (api.TorrentStatus, error) {
 			return api.TorrentStatus{}, rtorrent.ErrNotFound
 		},
-	}, db)
+	}, db, nil)
 	req := httptest.NewRequest("POST", "/v1/torrents", strings.NewReader("fake-bytes"))
 	req.Header.Set("Content-Type", "application/x-bittorrent")
 	req.Header.Set("X-Info-Hash", "DEADBEEF"+strings.Repeat("0", 32))

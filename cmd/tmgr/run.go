@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -478,7 +479,8 @@ func seedctlGetStatus(ctx context.Context, hc *http.Client, base, hash string) (
 
 // postItems uploads the per-tick rss snapshot to seedctl. Server-side upsert
 // keyed on (feed_name, guid); first_seen_at is only set on initial insert.
-// 30s timeout; payload is JSON; HTTP non-200 is an error.
+// Body is gzip-encoded — 800 items of JSON shrinks ~10× over the wire.
+// 30s timeout; HTTP non-200 is an error.
 func postItems(ctx context.Context, hc *http.Client, base string, items []api.ItemRecord) error {
 	if len(items) == 0 {
 		return nil
@@ -487,10 +489,19 @@ func postItems(ctx context.Context, hc *http.Client, base string, items []api.It
 	if err != nil {
 		return err
 	}
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write(body); err != nil {
+		return fmt.Errorf("gzip body: %w", err)
+	}
+	if err := zw.Close(); err != nil {
+		return fmt.Errorf("gzip close: %w", err)
+	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, "POST", base+"/v1/items", bytes.NewReader(body))
+	req, _ := http.NewRequestWithContext(ctx, "POST", base+"/v1/items", &buf)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
 	resp, err := hc.Do(req)
 	if err != nil {
 		return err

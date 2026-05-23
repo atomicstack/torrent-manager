@@ -1,6 +1,7 @@
 package main
 
 import (
+	"compress/gzip"
 	"context"
 	"flag"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -57,11 +59,15 @@ func main() {
 		logger.Error("open items db", "path", cfg.ItemsDB, "err", err)
 		os.Exit(1)
 	}
-	defer func() { _ = items.Close() }()
 
+	restartCh := make(chan struct{}, 1)
 	srv := &http.Server{
-		Addr:              cfg.Listen,
-		Handler:           withLogging(newHandler(client, items)),
+		Addr: cfg.Listen,
+		// withLogging wraps the outside so req_bytes/resp_bytes count actual
+		// wire bytes (post-gzip). withGzip decompresses request bodies sent
+		// with Content-Encoding: gzip and compresses responses when the client
+		// advertises Accept-Encoding: gzip.
+		Handler:           withLogging(withGzip(newHandler(client, items, restartCh))),
 		TLSConfig:         tlsCfg,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -77,10 +83,30 @@ func main() {
 		}
 	}()
 
-	<-ctx.Done()
+	shouldRestart := false
+	select {
+	case <-ctx.Done():
+	case <-restartCh:
+		shouldRestart = true
+	}
+
 	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutCtx)
+	_ = items.Close()
+
+	if shouldRestart {
+		exe, err := os.Executable()
+		if err != nil {
+			logger.Error("restart_executable", "err", err)
+			os.Exit(1)
+		}
+		logger.Info("restarting_via_exec", "exec", exe, "args", os.Args)
+		if err := syscall.Exec(exe, os.Args, os.Environ()); err != nil {
+			logger.Error("restart_exec", "err", err)
+			os.Exit(1)
+		}
+	}
 }
 
 func loadConfig(path string) (*config, error) {
@@ -147,4 +173,68 @@ func (c *countingReadCloser) Read(p []byte) (int, error) {
 	n, err := c.ReadCloser.Read(p)
 	c.n += int64(n)
 	return n, err
+}
+
+// withGzip handles HTTP-layer gzip in both directions. JSON bodies on these
+// endpoints typically shrink 6-10x; the cost is a sub-millisecond CPU pass.
+//
+// Request side: if Content-Encoding: gzip, replace r.Body with a gzip reader
+// so the handler reads decompressed bytes. Strip the Content-Encoding +
+// Content-Length headers so handlers don't see stale values.
+//
+// Response side: if Accept-Encoding includes gzip, wrap the ResponseWriter so
+// the handler's writes are gzipped before reaching the underlying writer.
+// Set Content-Encoding: gzip and clear Content-Length on the first write
+// (or first WriteHeader, whichever comes first).
+func withGzip(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.EqualFold(r.Header.Get("Content-Encoding"), "gzip") {
+			zr, err := gzip.NewReader(r.Body)
+			if err != nil {
+				http.Error(w, "invalid gzip body", http.StatusBadRequest)
+				return
+			}
+			defer zr.Close()
+			r.Body = io.NopCloser(zr)
+			r.Header.Del("Content-Encoding")
+			r.Header.Del("Content-Length")
+			r.ContentLength = -1
+		}
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		gz := gzip.NewWriter(w)
+		defer gz.Close()
+		gw := &gzipResponseWriter{ResponseWriter: w, gz: gz}
+		next.ServeHTTP(gw, r)
+	})
+}
+
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	gz          *gzip.Writer
+	wroteHeader bool
+}
+
+func (g *gzipResponseWriter) writeHeaderOnce(status int) {
+	if g.wroteHeader {
+		return
+	}
+	g.wroteHeader = true
+	h := g.ResponseWriter.Header()
+	h.Set("Content-Encoding", "gzip")
+	h.Del("Content-Length") // compressed length unknown until Close()
+	g.ResponseWriter.WriteHeader(status)
+}
+
+func (g *gzipResponseWriter) WriteHeader(status int) {
+	g.writeHeaderOnce(status)
+}
+
+func (g *gzipResponseWriter) Write(b []byte) (int, error) {
+	if !g.wroteHeader {
+		g.writeHeaderOnce(http.StatusOK)
+	}
+	return g.gz.Write(b)
 }

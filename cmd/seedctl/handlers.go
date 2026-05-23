@@ -26,11 +26,16 @@ type rtorrentClient interface {
 type handler struct {
 	c     rtorrentClient
 	items *itemsdb.DB
+	// restartCh is the signal channel the /v1/admin/restart endpoint pokes when
+	// a remote restart is requested. The main goroutine selects on it, does a
+	// graceful srv.Shutdown(), then syscall.Execs the on-disk binary so the
+	// new build takes over inside the same tmux pane.
+	restartCh chan<- struct{}
 }
 
-func newHandler(c rtorrentClient, items *itemsdb.DB) http.Handler {
+func newHandler(c rtorrentClient, items *itemsdb.DB, restartCh chan<- struct{}) http.Handler {
 	mux := http.NewServeMux()
-	h := &handler{c: c, items: items}
+	h := &handler{c: c, items: items, restartCh: restartCh}
 	mux.HandleFunc("GET /healthz", h.healthz)
 	mux.HandleFunc("GET /v1/torrents", h.listTorrents)
 	mux.HandleFunc("GET /v1/torrents/{hash}", h.getTorrent)
@@ -38,6 +43,7 @@ func newHandler(c rtorrentClient, items *itemsdb.DB) http.Handler {
 	mux.HandleFunc("POST /v1/items", h.upsertItems)
 	mux.HandleFunc("GET /v1/items", h.listItems)
 	mux.HandleFunc("GET /v1/items/export", h.exportItems)
+	mux.HandleFunc("POST /v1/admin/restart", h.adminRestart)
 	return mux
 }
 
@@ -193,6 +199,23 @@ func itemRowsToRecords(in []itemsdb.Item) []api.ItemRecord {
 		})
 	}
 	return out
+}
+
+// adminRestart signals the main loop to gracefully shut down and re-exec the
+// current binary in place. Returns 202 immediately; the actual exec happens
+// after the response is flushed so callers see the ack. mTLS gates the route.
+func (h *handler) adminRestart(w http.ResponseWriter, _ *http.Request) {
+	if h.restartCh == nil {
+		http.Error(w, "restart channel not wired", http.StatusInternalServerError)
+		return
+	}
+	select {
+	case h.restartCh <- struct{}{}:
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "restarting"})
+	default:
+		// already requested — idempotent ack.
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "restart already pending"})
+	}
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

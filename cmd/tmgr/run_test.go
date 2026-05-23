@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -551,7 +552,7 @@ func TestRun_FeedLogsUseName(t *testing.T) {
 }
 
 // TestPostItems_PostsBatch verifies that postItems serialises the request body
-// as json and POSTs it to /v1/items with the right content-type.
+// as json, gzip-encodes it, and POSTs it to /v1/items with the right headers.
 func TestPostItems_PostsBatch(t *testing.T) {
 	var got api.ItemsUpsertRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -564,7 +565,11 @@ func TestPostItems_PostsBatch(t *testing.T) {
 			return
 		}
 		require.Equal(t, "application/json", r.Header.Get("Content-Type"))
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&got))
+		require.Equal(t, "gzip", r.Header.Get("Content-Encoding"))
+		zr, err := gzip.NewReader(r.Body)
+		require.NoError(t, err)
+		defer zr.Close()
+		require.NoError(t, json.NewDecoder(zr).Decode(&got))
 		w.WriteHeader(200)
 	}))
 	defer srv.Close()
