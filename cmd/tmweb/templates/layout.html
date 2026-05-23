@@ -91,6 +91,16 @@
       q.focus();
       q.select();
     });
+
+    // press escape to dismiss any open modal. handled at document level so
+    // the modal doesn't need a focusable wrapper to receive the key event.
+    document.addEventListener('keydown', function (e) {
+      if (e.key !== 'Escape') return;
+      var modal = document.getElementById('modal');
+      if (modal && modal.innerHTML.trim() !== '') {
+        modal.innerHTML = '';
+      }
+    });
   })();
   </script>
 </body>
