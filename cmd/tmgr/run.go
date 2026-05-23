@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math/rand"
+	"math/rand/v2"
 	"net/http"
 	"path/filepath"
 	"regexp"
@@ -136,7 +136,7 @@ func Run(ctx context.Context, cfg Config, hc *http.Client) (RunResult, error) {
 
 	// startup jitter — skipped if context already has a deadline shorter than 30s
 	if dl, ok := ctx.Deadline(); !ok || time.Until(dl) > 30*time.Second {
-		jitter := time.Duration(rand.Intn(30_000)) * time.Millisecond
+		jitter := time.Duration(rand.IntN(30_000)) * time.Millisecond
 		slog.Info("jitter_sleep", "ms", jitter.Milliseconds())
 		select {
 		case <-ctx.Done():
