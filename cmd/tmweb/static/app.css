@@ -212,6 +212,18 @@ th, td {
   word-break: break-all;
 }
 
+/* anchors inside the meta dl inherit the row's text colour rather than the
+   browser-default link blue, so the "torrent" link reads as part of the row
+   rather than as a callout. */
+.modal-card dd a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--muted);
+  text-underline-offset: 2px;
+}
+
+.modal-card dd a:hover { text-decoration-color: currentColor; }
+
 .modal-card .mono {
   font-family: ui-monospace, monospace;
   font-size: 0.8rem;
