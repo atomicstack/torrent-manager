@@ -312,15 +312,7 @@ th, td {
   transition: background 0.12s ease;
 }
 .btn-classify:hover { background: var(--border); }
-/* spin the sparkle while htmx is in-flight so the user gets feedback
-   that claude has been asked. */
-.btn-classify.htmx-request {
-  animation: classify-spin 1.2s linear infinite;
-  pointer-events: none;
-}
-@keyframes classify-spin {
-  to { transform: rotate(360deg); }
-}
+.btn-classify.htmx-request { pointer-events: none; }
 
 /* in-flight enqueue progress: the form swaps to a shimmer bar + step list
    when htmx adds .htmx-request. modal closes once the POST completes
@@ -367,15 +359,21 @@ form.htmx-request .step-list .step-3.step::before {
   content: '⟳';
 }
 
-/* indeterminate progress bar shown while claude classifies a no-rule tv item. */
+/* indeterminate progress bar shown while claude classifies a no-rule tv item.
+   hidden by default; revealed via the :has() rules below when the ✨ button
+   is in-flight (htmx adds .htmx-request to it). during that window the
+   save_dir input row is hidden so the shimmer takes its place rather than
+   stacking awkwardly below. */
 .classify-loading {
-  display: flex;
+  display: none;
   align-items: center;
   gap: 0.6rem;
-  margin: 0.75rem 0;
+  margin: 0.5rem 0;
   font-size: 0.85rem;
   color: var(--muted);
 }
+.form-row-block:has(.btn-classify.htmx-request) .classify-loading { display: flex; }
+.form-row-block:has(.btn-classify.htmx-request) .form-row { display: none; }
 .classify-loading .bar {
   flex: 1;
   height: 4px;
