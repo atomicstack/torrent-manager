@@ -1,0 +1,13 @@
+{{define "_enqueue_progress.html"}}
+<div class="enqueue-progress">
+  <div class="classify-loading">
+    <div class="bar"><div class="fill"></div></div>
+    <span>enqueuing…</span>
+  </div>
+  <ol class="step-list">
+    <li class="step step-1">fetching .torrent from tracker</li>
+    <li class="step step-2">uploading to rtorrent</li>
+    <li class="step step-3">finalising</li>
+  </ol>
+</div>
+{{end}}

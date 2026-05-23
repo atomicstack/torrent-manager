@@ -16,5 +16,6 @@
             hx-on:click="document.getElementById('modal').innerHTML=''">cancel</button>
     <button type="submit" class="btn-enqueue btn-primary">confirm</button>
   </div>
+  {{template "_enqueue_progress.html" .}}
 </form>
 {{end}}

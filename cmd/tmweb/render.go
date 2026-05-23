@@ -56,20 +56,26 @@ func newRenderer() (*renderer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse rows: %w", err)
 	}
-	confirm, err := template.New("_confirm.html").Funcs(funcMap).ParseFS(templatesFS, "templates/_confirm.html")
+	// _confirm.html + the no-rule modal + the bare form fragment all include
+	// the _enqueue_progress.html partial (the in-flight shimmer-bar + step
+	// list), so it has to be in every parse set.
+	confirm, err := template.New("_confirm.html").Funcs(funcMap).
+		ParseFS(templatesFS, "templates/_confirm.html", "templates/_enqueue_progress.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse confirm: %w", err)
 	}
-	// _confirm_norule.html embeds the _enqueue_form.html partial via {{template ...}},
-	// so they share one parse set. The classify endpoint also renders just the
-	// form partial; we hold a separate template handle for that.
 	confirmNoRule, err := template.New("_confirm_norule.html").Funcs(funcMap).
-		ParseFS(templatesFS, "templates/_confirm_norule.html", "templates/_enqueue_form.html")
+		ParseFS(templatesFS,
+			"templates/_confirm_norule.html",
+			"templates/_enqueue_form.html",
+			"templates/_enqueue_progress.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse confirm_norule: %w", err)
 	}
 	enqueueForm, err := template.New("_enqueue_form.html").Funcs(funcMap).
-		ParseFS(templatesFS, "templates/_enqueue_form.html")
+		ParseFS(templatesFS,
+			"templates/_enqueue_form.html",
+			"templates/_enqueue_progress.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse enqueue_form: %w", err)
 	}

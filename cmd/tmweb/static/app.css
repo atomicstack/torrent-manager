@@ -265,6 +265,51 @@ th, td {
   color: var(--fg);
 }
 
+/* in-flight enqueue progress: the form swaps to a shimmer bar + step list
+   when htmx adds .htmx-request. modal closes once the POST completes
+   (hx-on::after-request empties #modal). */
+.enqueue-progress { display: none; }
+form.htmx-request .form-row,
+form.htmx-request .modal-actions { display: none; }
+form.htmx-request .enqueue-progress { display: block; }
+
+.step-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.step-list .step {
+  padding: 0.15rem 0 0.15rem 1.4rem;
+  position: relative;
+  opacity: 0.4;
+}
+.step-list .step::before {
+  content: '○';
+  position: absolute;
+  left: 0;
+  top: 0.15rem;
+  font-size: 0.9em;
+}
+/* each step lights up in sequence; delays are rough (matches typical 0.5-1s
+   tracker fetch + 0.3s rtorrent load), but the animation keeps running until
+   the POST returns + the modal closes, so a slower-than-expected enqueue
+   just leaves the last step active rather than racing past the truth. */
+form.htmx-request .step-list .step-1 { animation: step-active 1.2s ease-out forwards; }
+form.htmx-request .step-list .step-2 { animation: step-active 1.2s ease-out forwards 1.0s; }
+form.htmx-request .step-list .step-3 { animation: step-active 1.2s ease-out forwards 2.0s; }
+@keyframes step-active {
+  0%        { opacity: 0.4; }
+  10%, 70%  { opacity: 1; color: var(--accent); }
+  100%      { opacity: 0.7; color: var(--fg); }
+}
+form.htmx-request .step-list .step-1.step::before,
+form.htmx-request .step-list .step-2.step::before,
+form.htmx-request .step-list .step-3.step::before {
+  content: '⟳';
+}
+
 /* indeterminate progress bar shown while claude classifies a no-rule tv item. */
 .classify-loading {
   display: flex;
