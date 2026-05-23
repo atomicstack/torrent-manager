@@ -1,4 +1,4 @@
-.PHONY: help build build-tmgr build-seedctl test test-integration lint certs image image-local image-import push deploy deploy-seedhost clean
+.PHONY: help build build-tmgr build-seedctl build-tmweb test test-integration lint certs image image-local image-import push deploy deploy-seedhost clean
 
 SEEDCTL_HOST ?= tiny.example.com
 IMAGE ?= ghcr.io/atomicstack/tmgr
@@ -9,7 +9,7 @@ K3S_NODES ?= node-1.local node-2.local
 help: ## list targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' Makefile | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-build: build-tmgr build-seedctl ## build both binaries for the local host
+build: build-tmgr build-seedctl build-tmweb ## build all binaries for the local host
 
 build-tmgr: ## build tmgr (cross-compile arm64 for k3s)
 	mkdir -p dist
@@ -18,6 +18,10 @@ build-tmgr: ## build tmgr (cross-compile arm64 for k3s)
 build-seedctl: ## build seedctl (cross-compile amd64 for the seedbox)
 	mkdir -p dist
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build -tags=sqlite_fts5 -o dist/seedctl-linux-amd64 ./cmd/seedctl
+
+build-tmweb: ## build tmweb (cross-compile arm64 for k3s; no cgo — pure http client)
+	mkdir -p dist
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o dist/tmweb-linux-arm64 ./cmd/tmweb
 
 test: ## run unit tests
 	go test -tags=sqlite_fts5 -race ./...
