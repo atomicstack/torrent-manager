@@ -148,6 +148,13 @@ func loadConfig(path string) (*config, error) {
 	return &c, nil
 }
 
+// noisyLowSignalPaths get logged at DEBUG (silent at the default INFO level)
+// because k8s liveness + readiness probes hit them every 10-30s and they
+// dilute the signal in the log stream.
+var noisyLowSignalPaths = map[string]bool{
+	"/healthz": true,
+}
+
 func withLogging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -162,7 +169,11 @@ func withLogging(next http.Handler) http.Handler {
 		r.Body = bodyCounter
 		rw := &respRecorder{ResponseWriter: w, status: 200}
 		next.ServeHTTP(rw, r)
-		slog.Info("request",
+		level := slog.LevelInfo
+		if noisyLowSignalPaths[r.URL.Path] {
+			level = slog.LevelDebug
+		}
+		slog.Log(r.Context(), level, "request",
 			"method", r.Method,
 			"path", r.URL.Path,
 			"status", rw.status,
