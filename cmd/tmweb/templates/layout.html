@@ -11,16 +11,21 @@
   <header>
     <h1>torrents</h1>
     <form id="search" class="search-bar"
-          hx-get="/api/search" hx-trigger="input changed delay:250ms from:input, change from:select, load"
+          hx-get="/api/search"
+          hx-trigger="input changed delay:250ms from:input[type=search], change, load"
           hx-target="#rows" hx-swap="innerHTML">
-      <input type="search" name="q" placeholder="search by title…" autofocus>
-      <select name="feed">
+      <span class="search-input-wrap">
+        <input id="search-q" type="search" name="q" placeholder="search by title…" autofocus>
+        <button type="button" class="search-clear" aria-label="clear search"
+                onclick="var i=document.getElementById('search-q'); i.value=''; i.dispatchEvent(new Event('input', {bubbles:true})); i.focus();">×</button>
+      </span>
+      <select name="feed_filter">
         <option value="">all feeds</option>
         {{range .Feeds}}
         <option value="{{.}}">{{.}}</option>
         {{end}}
       </select>
-      <label><input type="checkbox" name="include_enqueued" value="1"> include enqueued</label>
+      <label><input type="checkbox" name="include_enqueued" value="1" checked> include enqueued</label>
     </form>
   </header>
   <main>

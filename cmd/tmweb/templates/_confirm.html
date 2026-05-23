@@ -11,6 +11,7 @@
       {{end}}
     </dl>
     <form hx-post="/api/enqueue?feed={{.Item.FeedName | urlquery}}&guid={{.Item.GUID | urlquery}}"
+          hx-include="#search"
           hx-target="#rows" hx-swap="innerHTML"
           hx-on::after-request="document.getElementById('modal').innerHTML=''">
       <input type="hidden" name="save_dir" value="{{.SaveDir}}">

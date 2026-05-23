@@ -238,23 +238,24 @@ func (h *handler) index(w http.ResponseWriter, _ *http.Request) {
 // fragment to swap in (instead of leaving "loading…" stuck on the page).
 func (h *handler) search(w http.ResponseWriter, req *http.Request) {
 	q := req.URL.Query()
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-
-	items, err := h.seedctl.ListItems(req.Context(), ItemsQuery{
+	h.renderRows(w, req.Context(), ItemsQuery{
 		Q:               q.Get("q"),
-		Feed:            q.Get("feed"),
+		Feed:            q.Get("feed_filter"),
 		IncludeEnqueued: q.Get("include_enqueued") == "1",
 		Limit:           200,
 	})
+}
+
+// renderRows queries seedctl and writes the table-rows html fragment, or an
+// error row on failure. Shared by GET /api/search and POST /api/enqueue
+// (which re-renders with the user's preserved filter state after a
+// successful enqueue).
+func (h *handler) renderRows(w http.ResponseWriter, ctx context.Context, q ItemsQuery) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	items, err := h.seedctl.ListItems(ctx, q)
 	if err != nil {
 		slog.Debug("search_seedctl_failed", "err", err)
-		// htmx-friendly: return 200 with an error row so the table body
-		// shows a useful message instead of an empty/loading state. The
-		// error message comes from the seedctl client which already
-		// scrubs sensitive info (just status + path).
 		w.WriteHeader(http.StatusOK)
-		// escape the error message to avoid breaking the surrounding <tr>
-		// if seedctl returned a URL containing < or & in the error string.
 		fmt.Fprintf(w, `<tr><td colspan="4" class="empty">error: %s</td></tr>`, html.EscapeString(err.Error()))
 		return
 	}
@@ -452,10 +453,15 @@ func (h *handler) enqueueDo(w http.ResponseWriter, req *http.Request) {
 		"feed", it.FeedName, "guid", it.GUID, "hash", hash,
 		"save_dir", saveDir, "had_rule", it.MatchedRule != "")
 
-	// re-render the whole table so the row picks up its new badge. The
-	// source written by seedctl is "auto" — phase 3 may switch this to
-	// "manual" but the badge is already informative as-is.
-	h.search(w, req)
+	// re-render the table preserving whatever filter state the user had open.
+	// The modal form uses hx-include="#search" so the search form's q +
+	// feed_filter + include_enqueued are present in the POST body.
+	h.renderRows(w, req.Context(), ItemsQuery{
+		Q:               req.PostForm.Get("q"),
+		Feed:            req.PostForm.Get("feed_filter"),
+		IncludeEnqueued: req.PostForm.Get("include_enqueued") == "1",
+		Limit:           200,
+	})
 }
 
 // lookupItem fetches an item by (feed, guid) by listing the feed with
