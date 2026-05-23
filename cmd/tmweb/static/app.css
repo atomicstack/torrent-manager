@@ -359,11 +359,11 @@ form.htmx-request .step-list .step-3.step::before {
   content: '⟳';
 }
 
-/* indeterminate progress bar shown while claude classifies a no-rule tv item.
-   hidden by default; revealed via the :has() rules below when the ✨ button
-   is in-flight (htmx adds .htmx-request to it). during that window the
-   save_dir input row is hidden so the shimmer takes its place rather than
-   stacking awkwardly below. */
+/* indeterminate progress bar shown above the save_dir input while claude
+   classifies a no-rule tv item. hidden by default; revealed via :has()
+   when the ✨ button has .htmx-request (htmx adds it for the duration of
+   the in-flight GET). the input row stays visible alongside so the user
+   can still edit / cancel without waiting. */
 .classify-loading {
   display: none;
   align-items: center;
@@ -373,7 +373,6 @@ form.htmx-request .step-list .step-3.step::before {
   color: var(--muted);
 }
 .form-row-block:has(.btn-classify.htmx-request) .classify-loading { display: flex; }
-.form-row-block:has(.btn-classify.htmx-request) .form-row { display: none; }
 .classify-loading .bar {
   flex: 1;
   height: 4px;
