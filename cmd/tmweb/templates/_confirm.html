@@ -25,7 +25,8 @@
       <div class="modal-actions">
         <button type="button" class="btn-cancel"
                 hx-on:click="document.getElementById('modal').innerHTML=''">cancel</button>
-        <button type="submit" class="btn-enqueue btn-primary">confirm</button>
+        <button type="submit" class="btn-enqueue btn-primary"
+                {{- if .Item.Enqueued}} disabled title="already enqueued"{{end}}>confirm</button>
       </div>
     </form>
   </div>

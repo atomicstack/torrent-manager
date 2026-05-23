@@ -1,5 +1,5 @@
 {{if not .Items}}
-<tr><td colspan="4" class="empty">no matches</td></tr>
+<tr><td colspan="3" class="empty">no matches</td></tr>
 {{end}}
 {{range .Items}}
 <tr data-feed="{{.FeedName}}" data-guid="{{.GUID}}" data-hash="{{.InfoHash}}">
@@ -8,24 +8,16 @@
     <span class="cell-meta-sep">·</span>
     <span class="cell-seen" data-ts="{{.FirstSeenAt}}" title="{{iso .FirstSeenAt}}">{{ago .FirstSeenAt}}</span>
   </td>
-  <td class="cell-title"><a href="{{.Link}}" target="_blank" rel="noopener">{{.Title}}</a></td>
+  <td class="cell-title">
+    <a class="cell-title-link" href="#"
+       hx-get="/api/enqueue-confirm?feed={{.FeedName | urlquery}}&guid={{.GUID | urlquery}}"
+       hx-target="#modal" hx-swap="innerHTML"
+       onclick="event.preventDefault()">{{.Title}}</a>
+  </td>
   <td class="cell-status">
     {{if .Enqueued}}
       <span class="badge badge-enqueued">enqueued</span>
     {{end}}
-  </td>
-  <td class="cell-action">
-    {{- if .Enqueued -}}
-    <button class="btn-enqueue" disabled title="already enqueued">enqueued</button>
-    {{- else if .MatchedRule -}}
-    <button class="btn-enqueue"
-            hx-get="/api/enqueue-confirm?feed={{.FeedName | urlquery}}&guid={{.GUID | urlquery}}"
-            hx-target="#modal" hx-swap="innerHTML">enqueue</button>
-    {{- else -}}
-    <button class="btn-enqueue"
-            hx-get="/api/enqueue-confirm?feed={{.FeedName | urlquery}}&guid={{.GUID | urlquery}}"
-            hx-target="#modal" hx-swap="innerHTML">enqueue</button>
-    {{- end -}}
   </td>
 </tr>
 {{end}}

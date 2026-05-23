@@ -1,9 +1,10 @@
 {{define "_torrent_meta.html"}}
 <dl id="torrent-meta"{{if .OOB}} hx-swap-oob="true"{{end}}>
-  <dt>title</dt> <dd>{{.Item.Title}}</dd>
+  <dt>title</dt> <dd class="mono">{{.Item.Title}}</dd>
   <dt>feed</dt>  <dd>{{.Item.FeedName}}{{if .Category}} ({{.Category}}){{end}}</dd>
   {{- if .Item.MatchedRule}}<dt>rule</dt><dd>{{.Item.MatchedRule}}</dd>{{end -}}
   {{- if .Item.InfoHash}}<dt>info hash</dt><dd class="mono">{{.Item.InfoHash}}</dd>{{end -}}
+  {{- if .Item.Link}}<dt>url</dt><dd><a href="{{.Item.Link}}" target="_blank" rel="noopener">torrent</a></dd>{{end -}}
   {{- if .Meta -}}
   <dt>size</dt>    <dd>{{.Meta.BytesHuman}}</dd>
   <dt>contents</dt><dd>📁 {{.Meta.DirCount}} &nbsp; 📄 {{.Meta.FileCount}}</dd>

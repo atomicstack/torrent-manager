@@ -242,6 +242,42 @@ func TestEnqueueConfirm_RenderModal(t *testing.T) {
 	assert.Contains(t, body, `hx-post="/api/enqueue`, "confirm button POSTs back to /api/enqueue")
 }
 
+// TestEnqueueConfirm_DisabledForEnqueuedItem covers the new UX: when the
+// modal opens for an already-enqueued item the confirm button must be
+// disabled so the user can't double-enqueue from the still-clickable row.
+func TestEnqueueConfirm_DisabledForEnqueuedItem(t *testing.T) {
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/items" {
+			_ = json.NewEncoder(w).Encode(api.ItemsListResponse{Items: []api.ItemRecord{
+				{
+					FeedName:    "TrackerA (TV)",
+					GUID:        "g1",
+					Title:       "Foo.S01E01.1080p",
+					MatchedRule: "foo",
+					Enqueued:    true,
+					LastSeenAt:  time.Now().Unix(),
+				},
+			}})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(stub.Close)
+	r, err := newRenderer()
+	require.NoError(t, err)
+	mux := newMux(NewSeedctl(stub.URL, stub.Client()),
+		[]string{"TrackerA (TV)"}, nil, nil,
+		[]feed.ShowRule{fooRule()},
+		savedir.Roots{TV: "/t/tv"}, nil, r)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet,
+		"/api/enqueue-confirm?feed=TrackerA%20(TV)&guid=g1", nil))
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := rr.Body.String()
+	assert.Contains(t, body, "Foo.S01E01.1080p", "modal opens for an enqueued item too")
+	assert.Contains(t, body, `disabled title="already enqueued"`, "confirm button is disabled for enqueued items")
+}
+
 // TestEnqueueConfirm_NoRule_OtherCategory covers the "other" branch of the
 // no-rule flow: the modal renders with an empty save_dir input (no auto
 // proposal, no auto-pick failure note — it's just a freeform field).

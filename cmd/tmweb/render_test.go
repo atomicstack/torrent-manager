@@ -67,6 +67,24 @@ func TestRenderRows_NotEnqueuedHasNoBadge(t *testing.T) {
 	assert.NotContains(t, body, "badge")
 }
 
+// TestRenderRows_TitleIsClickableModalTrigger covers the post-redesign
+// behavior: the title cell itself fires the modal-open htmx request (no
+// separate enqueue button column).
+func TestRenderRows_TitleIsClickableModalTrigger(t *testing.T) {
+	r, err := newRenderer()
+	require.NoError(t, err)
+	var buf bytes.Buffer
+	require.NoError(t, r.rows.Execute(&buf, rowsTemplateData{Items: []api.ItemRecord{
+		{FeedName: "TrackerA (TV)", GUID: "g1", Title: "Foo S01E01", FirstSeenAt: time.Now().Unix(), LastSeenAt: time.Now().Unix()},
+	}}))
+	body := buf.String()
+	assert.Contains(t, body, "cell-title-link", "title cell now exposes a clickable link element")
+	assert.Contains(t, body, `hx-get="/api/enqueue-confirm`, "click opens the enqueue modal")
+	assert.Contains(t, body, `hx-target="#modal"`)
+	assert.NotContains(t, body, "btn-enqueue", "row-level enqueue button is gone")
+	assert.NotContains(t, body, "cell-action", "row-level action cell is gone")
+}
+
 // TestRenderRows_EmbedsCachedMetaScript verifies the rows fragment carries
 // a <script>window.cachedMeta = ...</script> block populated from items
 // with TotalBytes > 0, so the client has size + contents without an extra
