@@ -13,6 +13,9 @@ import (
 	"github.com/atomicstack/torrent-manager/internal/hashcache"
 	"github.com/atomicstack/torrent-manager/internal/tlsx"
 	"github.com/atomicstack/torrent-manager/internal/watchlist"
+	// sqlite3 driver registration lives at the binary root rather than inside
+	// internal/hashcache so the side effect is visible from main.
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func main() {

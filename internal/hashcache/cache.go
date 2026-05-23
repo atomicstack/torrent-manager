@@ -19,8 +19,12 @@ import (
 	"strings"
 
 	"github.com/atomicstack/torrent-manager/internal/api"
-	_ "github.com/mattn/go-sqlite3"
 )
+
+// NOTE: the github.com/mattn/go-sqlite3 driver registration lives at the
+// binary root (cmd/tmgr/main.go for hashcache, cmd/seedctl/main.go for
+// itemsdb) so the side effect is visible from main rather than buried in
+// a library import.
 
 // Entry is a single (hash, name) pair. Same shape as api.TorrentEntry so
 // callers can convert without a struct copy.

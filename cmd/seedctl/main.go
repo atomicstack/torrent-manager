@@ -18,6 +18,10 @@ import (
 	"github.com/atomicstack/torrent-manager/internal/itemsdb"
 	"github.com/atomicstack/torrent-manager/internal/rtorrent"
 	"github.com/atomicstack/torrent-manager/internal/tlsx"
+	// sqlite3 driver registration lives at the binary root so the side effect
+	// is visible from main rather than buried in a library import. itemsdb +
+	// hashcache deliberately don't register it themselves.
+	_ "github.com/mattn/go-sqlite3"
 	"gopkg.in/yaml.v3"
 )
 
