@@ -224,18 +224,18 @@ th, td {
   margin-top: 1rem;
 }
 
+/* default sits at a darker mix; hover brightens to the pure accent so the
+   button reads as "lighting up" rather than dimming. color-mix handles
+   light + dark modes uniformly. */
 .btn-primary {
-  background: var(--accent);
+  background: color-mix(in srgb, var(--accent) 80%, black);
   color: white;
-  border-color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 80%, black);
 }
 
-/* darken the accent ~15% on hover. color-mix handles dark + light modes
-   without needing a second variable — slightly darker reads as "more
-   saturated" in both. */
 .btn-primary:not([disabled]):hover {
-  background: color-mix(in srgb, var(--accent) 80%, black);
-  border-color: color-mix(in srgb, var(--accent) 80%, black);
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
 .btn-cancel {
