@@ -361,27 +361,46 @@ form.htmx-request .step-list .step-3.step::before {
   content: '⟳';
 }
 
-/* indeterminate progress bar shown above the save_dir input while claude
-   classifies a no-rule tv item. hidden by default; revealed via :has()
-   when the ✨ button has .htmx-request (htmx adds it for the duration of
-   the in-flight GET). the input row stays visible alongside so the user
-   can still edit / cancel without waiting. */
+/* classify-step animations: same lighting cadence as the submit steps but
+   scoped to the form-row-block while the ✨ button is in-flight. timings
+   are rough (server-side fetch is ~0.5-1s, parse + cache are near-instant,
+   claude takes ~1-3s) — the last step lingers until the swap arrives, so
+   a slow claude leaves "querying claude" highlighted rather than racing
+   past the truth. */
+.form-row-block:has(.btn-classify.htmx-request) .classify-step-1 { animation: step-active 0.6s ease-out forwards; }
+.form-row-block:has(.btn-classify.htmx-request) .classify-step-2 { animation: step-active 0.5s ease-out forwards 0.5s; }
+.form-row-block:has(.btn-classify.htmx-request) .classify-step-3 { animation: step-active 0.5s ease-out forwards 0.85s; }
+.form-row-block:has(.btn-classify.htmx-request) .classify-step-4 { animation: step-active 1.5s ease-out forwards 1.2s; }
+.form-row-block:has(.btn-classify.htmx-request) .classify-step-1.step::before,
+.form-row-block:has(.btn-classify.htmx-request) .classify-step-2.step::before,
+.form-row-block:has(.btn-classify.htmx-request) .classify-step-3.step::before,
+.form-row-block:has(.btn-classify.htmx-request) .classify-step-4.step::before {
+  content: '⟳';
+}
+
+/* indeterminate progress bar (with a step list underneath) shown while
+   either claude classifies (✨ click) or seedctl enqueues (form submit).
+   stacked vertically — bar on top, step labels below — so a long step
+   label doesn't squeeze the bar's rendered width or wrap. hidden by
+   default; revealed via the :has() rule for the classify flow, and via
+   form.htmx-request → .enqueue-progress for the submit flow. */
 .classify-loading {
   display: none;
-  align-items: center;
-  gap: 0.6rem;
   margin: 0.5rem 0;
   font-size: 0.85rem;
   color: var(--muted);
 }
-.form-row-block:has(.btn-classify.htmx-request) .classify-loading { display: flex; }
+.form-row-block:has(.btn-classify.htmx-request) .classify-loading { display: block; }
 .classify-loading .bar {
-  flex: 1;
+  width: 100%;
   height: 4px;
   background: var(--border);
   border-radius: 2px;
   overflow: hidden;
   position: relative;
+}
+.classify-loading .step-list {
+  margin-top: 0.4rem;
 }
 .classify-loading .bar .fill {
   position: absolute;
