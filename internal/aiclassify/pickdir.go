@@ -161,9 +161,10 @@ func (c *Client) PickDir(ctx context.Context, title string, existingDirs []strin
 	}
 
 	resp, err := c.inner.Messages.New(ctx, anthropic.MessageNewParams{
-		// Opus 4.7: sonnet 4.6 stumbled on season-pack layouts (picking the
-		// show root instead of a SeasonN subdir, or inventing a subdir name),
-		// so pickdir stays on opus despite the latency hit.
+		// Opus 4.7: sonnet 4.6 stumbled on season-pack layouts — when the
+		// torrent itself already lays out SeasonN/ subdirs, sonnet still
+		// picked a SeasonN/ subdir under the show rather than the show's
+		// root, so pickdir stays on opus despite the latency hit.
 		Model:     anthropic.ModelClaudeOpus4_7,
 		MaxTokens: 300,
 		System: []anthropic.TextBlockParam{
