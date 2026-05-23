@@ -31,42 +31,21 @@ func TestExtractHash_FromLink(t *testing.T) {
 	assert.Equal(t, "CAFEBABE1234567890ABCDEF1234567890ABCDEF", h)
 }
 
-func TestExtractHash_FromEnclosure(t *testing.T) {
-	it := feed.Item{
-		Enclosure: "https://tracker/dl/feedbeef1234567890abcdef1234567890abcdef.torrent",
-	}
-	h, ok := feed.ExtractHash(it)
-	assert.True(t, ok)
-	assert.Equal(t, "FEEDBEEF1234567890ABCDEF1234567890ABCDEF", h)
-}
-
 func TestExtractHash_NoMatch(t *testing.T) {
-	it := feed.Item{GUID: "no-hex-anywhere", Link: "also nope", Enclosure: "or here"}
+	it := feed.Item{GUID: "no-hex-anywhere", Link: "also nope"}
 	_, ok := feed.ExtractHash(it)
 	assert.False(t, ok)
 }
 
-func TestExtractHash_GUIDWinsOverLinkAndEnclosure(t *testing.T) {
-	// all three fields carry distinct hashes; guid must win.
+func TestExtractHash_GUIDWinsOverLink(t *testing.T) {
+	// both fields carry distinct hashes; guid must win.
 	it := feed.Item{
-		GUID:      "https://tracker/torrent/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		Link:      "https://tracker/torrent/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-		Enclosure: "https://tracker/dl/cccccccccccccccccccccccccccccccccccccccc.torrent",
+		GUID: "https://tracker/torrent/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Link: "https://tracker/torrent/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 	}
 	h, ok := feed.ExtractHash(it)
 	require.True(t, ok)
 	assert.Equal(t, strings.Repeat("A", 40), h)
-}
-
-func TestExtractHash_LinkWinsOverEnclosure(t *testing.T) {
-	// guid empty; link must win over enclosure.
-	it := feed.Item{
-		Link:      "https://tracker/torrent/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-		Enclosure: "https://tracker/dl/cccccccccccccccccccccccccccccccccccccccc.torrent",
-	}
-	h, ok := feed.ExtractHash(it)
-	require.True(t, ok)
-	assert.Equal(t, strings.Repeat("B", 40), h)
 }
 
 func TestComputeHashFromTorrentBytes(t *testing.T) {

@@ -13,11 +13,11 @@ import (
 
 var hashRegex = regexp.MustCompile(`(?i)\b[a-f0-9]{40}\b`)
 
-// ExtractHash scans the item's guid, link, and enclosure for a 40-char hex
-// info hash. Returns uppercase hash + true on the first match, or "" + false
-// if none of the fields contain a recognisable hash.
+// ExtractHash scans the item's guid + link for a 40-char hex info hash.
+// Returns uppercase hash + true on the first match, or "" + false if none of
+// the fields contain a recognisable hash.
 func ExtractHash(it Item) (string, bool) {
-	for _, s := range []string{it.GUID, it.Link, it.Enclosure} {
+	for _, s := range []string{it.GUID, it.Link} {
 		if m := hashRegex.FindString(s); m != "" {
 			return strings.ToUpper(m), true
 		}

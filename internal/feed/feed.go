@@ -13,11 +13,18 @@ import (
 )
 
 // Item is the minimum subset of a feed entry we care about.
+//
+// Link semantically means "the download URL for the .torrent file":
+//   - if the feed entry has an <enclosure>, Link = that enclosure URL.
+//   - otherwise Link = the entry's <link> element (TrackerA-style feeds with no enclosure).
+//
+// We deliberately collapse the two into one field because every feed we've
+// looked at sets <link> = <enclosure> when both are present; storing them
+// separately wasted bytes for no information gain.
 type Item struct {
-	Title     string
-	GUID      string
-	Link      string
-	Enclosure string // the .torrent download url
+	Title string
+	GUID  string
+	Link  string
 }
 
 // ShowRule is a single watchlist entry.
@@ -59,12 +66,10 @@ func Fetch(ctx context.Context, url, cookie string) ([]Item, error) {
 	out := make([]Item, 0, len(parsed.Items))
 	for _, it := range parsed.Items {
 		i := Item{Title: it.Title, GUID: it.GUID, Link: it.Link}
-		if len(it.Enclosures) > 0 {
-			i.Enclosure = it.Enclosures[0].URL
-		} else {
-			// some trackers (e.g. TrackerA/tracker-a.example) ship the torrent URL in
-			// <link> instead of <enclosure>. fall back so downstream fetch works.
-			i.Enclosure = it.Link
+		if len(it.Enclosures) > 0 && it.Enclosures[0].URL != "" {
+			// prefer <enclosure> when present (well-behaved RSS); fall back to
+			// <link> for TrackerA-style feeds that ship the torrent URL there.
+			i.Link = it.Enclosures[0].URL
 		}
 		out = append(out, i)
 	}

@@ -193,7 +193,6 @@ func Run(ctx context.Context, cfg Config, hc *http.Client) (RunResult, error) {
 				GUID:        itemGUID,
 				Title:       it.Title,
 				Link:        it.Link,
-				Enclosure:   it.Enclosure,
 				InfoHash:    hashFromFeed,
 				MatchedRule: matchedRuleName,
 				FirstSeenAt: tickNow,
@@ -272,13 +271,13 @@ func processItem(ctx context.Context, cfg Config, hc *http.Client, feedCookie st
 		slog.Info("observe_skip_fetch",
 			"title", it.Title, "rule", rule.Name,
 			"hash", hash, "hash_from_feed", hashFromFeed,
-			"enclosure", it.Enclosure)
+			"link", it.Link)
 		return nil
 	}
 
 	if !hashFromFeed {
 		var err error
-		torrentBytes, err = fetchBytes(ctx, it.Enclosure, feedCookie)
+		torrentBytes, err = fetchBytes(ctx, it.Link, feedCookie)
 		if err != nil {
 			return fmt.Errorf("fetch torrent: %w", err)
 		}
@@ -359,7 +358,7 @@ func processItem(ctx context.Context, cfg Config, hc *http.Client, feedCookie st
 	// path skipped the initial download). inspect-logging happens here so the user
 	// can see what's about to be queued — applies to fetch AND enqueue modes.
 	if torrentBytes == nil {
-		torrentBytes, err = fetchBytes(ctx, it.Enclosure, feedCookie)
+		torrentBytes, err = fetchBytes(ctx, it.Link, feedCookie)
 		if err != nil {
 			return fmt.Errorf("fetch torrent: %w", err)
 		}

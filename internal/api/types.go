@@ -41,7 +41,6 @@ type ItemRecord struct {
 	GUID          string `json:"guid"`
 	Title         string `json:"title"`
 	Link          string `json:"link,omitempty"`
-	Enclosure     string `json:"enclosure,omitempty"`
 	InfoHash      string `json:"info_hash,omitempty"`
 	MatchedRule   string `json:"matched_rule,omitempty"`
 	FirstSeenAt   int64  `json:"first_seen_at"`

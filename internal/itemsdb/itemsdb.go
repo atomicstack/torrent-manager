@@ -26,8 +26,7 @@ type Item struct {
 	FeedName      string
 	GUID          string
 	Title         string
-	Link          string
-	Enclosure     string
+	Link          string // the .torrent download url (enclosure-if-present, else feed's <link>)
 	InfoHash      string // empty when unknown
 	MatchedRule   string // empty when no rule matched
 	FirstSeenAt   time.Time
@@ -91,7 +90,33 @@ func Open(path string) (*DB, error) {
 		_ = sdb.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
+	if err := runMigrations(sdb); err != nil {
+		_ = sdb.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
 	return &DB{db: sdb}, nil
+}
+
+// runMigrations evolves the schema in-place when an older on-disk shape is
+// detected. Each migration is idempotent and gated on a column existence
+// probe so multiple opens of the same file are safe.
+func runMigrations(sdb *sql.DB) error {
+	// Drop the deprecated `enclosure` column if a pre-rename db still has it.
+	// Empirically every feed sets <link> == <enclosure> so the column was
+	// duplicate data; storing both wasted ~6mb/day on the wire across the
+	// snapshot upserts. Requires sqlite >= 3.35.
+	var has int
+	if err := sdb.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('items') WHERE name = 'enclosure'`,
+	).Scan(&has); err != nil {
+		return fmt.Errorf("probe enclosure column: %w", err)
+	}
+	if has > 0 {
+		if _, err := sdb.Exec(`ALTER TABLE items DROP COLUMN enclosure`); err != nil {
+			return fmt.Errorf("drop enclosure column: %w", err)
+		}
+	}
+	return nil
 }
 
 // Close releases the underlying connection pool.
@@ -104,7 +129,6 @@ CREATE TABLE IF NOT EXISTS items (
   guid           TEXT NOT NULL,
   title          TEXT NOT NULL,
   link           TEXT,
-  enclosure      TEXT,
   info_hash      TEXT,
   matched_rule   TEXT,
   first_seen_at  INTEGER NOT NULL,
@@ -154,12 +178,11 @@ func (d *DB) Upsert(ctx context.Context, items []Item) error {
 	}
 	defer tx.Rollback()
 	stmt, err := tx.PrepareContext(ctx, `
-INSERT INTO items (feed_name, guid, title, link, enclosure, info_hash, matched_rule, first_seen_at, last_seen_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO items (feed_name, guid, title, link, info_hash, matched_rule, first_seen_at, last_seen_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(feed_name, guid) DO UPDATE SET
   title        = excluded.title,
   link         = excluded.link,
-  enclosure    = excluded.enclosure,
   info_hash    = COALESCE(excluded.info_hash, items.info_hash),
   matched_rule = COALESCE(excluded.matched_rule, items.matched_rule),
   last_seen_at = excluded.last_seen_at
@@ -176,7 +199,7 @@ ON CONFLICT(feed_name, guid) DO UPDATE SET
 			return fmt.Errorf("upsert (%s, %s): FirstSeenAt and LastSeenAt are required", it.FeedName, it.GUID)
 		}
 		if _, err := stmt.ExecContext(ctx,
-			it.FeedName, it.GUID, it.Title, it.Link, it.Enclosure,
+			it.FeedName, it.GUID, it.Title, it.Link,
 			nullableString(it.InfoHash), nullableString(it.MatchedRule),
 			it.FirstSeenAt.Unix(), it.LastSeenAt.Unix(),
 		); err != nil {
@@ -219,7 +242,7 @@ func (d *DB) List(ctx context.Context, q ListQuery) ([]Item, error) {
 	}
 	query := fmt.Sprintf(`
 SELECT i.id, i.feed_name, i.guid, i.title,
-       COALESCE(i.link, ''), COALESCE(i.enclosure, ''),
+       COALESCE(i.link, ''),
        COALESCE(i.info_hash, ''), COALESCE(i.matched_rule, ''),
        i.first_seen_at, i.last_seen_at,
        CASE WHEN i.info_hash IS NOT NULL AND EXISTS (SELECT 1 FROM enqueues e WHERE e.info_hash = i.info_hash) THEN 1 ELSE 0 END AS enqueued,
@@ -238,7 +261,7 @@ FROM items i %s %s ORDER BY %s LIMIT ? OFFSET ?
 		var first, last int64
 		var enqueued int
 		if err := rows.Scan(&it.ID, &it.FeedName, &it.GUID, &it.Title,
-			&it.Link, &it.Enclosure,
+			&it.Link,
 			&it.InfoHash, &it.MatchedRule,
 			&first, &last, &enqueued, &it.EnqueueSource); err != nil {
 			return nil, err

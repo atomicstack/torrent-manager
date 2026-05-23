@@ -24,7 +24,7 @@ func TestParse_Valid(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, items, 2)
 	assert.Equal(t, "Severance.S02E01.1080p.WEB-DL.DDP5.1.H.264-GROUP", items[0].Title)
-	assert.Contains(t, items[0].Enclosure, ".torrent")
+	assert.Contains(t, items[0].Link, ".torrent")
 }
 
 func TestParse_Empty(t *testing.T) {
@@ -64,9 +64,9 @@ func TestFetch_SendsCookie(t *testing.T) {
 	assert.Equal(t, "pass=abc123", gotCookie)
 }
 
-// TestFetch_NoEnclosureFallsBackToLink: TrackerA-style feeds expose the .torrent URL
-// in <link> instead of <enclosure>. Item.Enclosure must be populated from
-// <link> in that case so the downstream fetch can find the bytes.
+// TestFetch_NoEnclosureFallsBackToLink: TrackerA-style feeds expose the .torrent
+// URL in <link> instead of <enclosure>. Item.Link must end up holding that
+// URL so the downstream fetch can find the bytes.
 func TestFetch_NoEnclosureFallsBackToLink(t *testing.T) {
 	rss := `<?xml version="1.0"?><rss version="2.0"><channel><title>x</title>` +
 		`<link>http://x</link><description>x</description>` +
@@ -83,7 +83,7 @@ func TestFetch_NoEnclosureFallsBackToLink(t *testing.T) {
 	items, err := feed.Fetch(context.Background(), srv.URL, "")
 	require.NoError(t, err)
 	require.Len(t, items, 1)
-	assert.Equal(t, "https://tracker.example/d.php?r=aabbccdd", items[0].Enclosure,
+	assert.Equal(t, "https://tracker.example/d.php?r=aabbccdd", items[0].Link,
 		"missing <enclosure> should fall back to <link>")
 }
 
@@ -106,7 +106,7 @@ func TestFetch_EnclosureWinsOverLink(t *testing.T) {
 	items, err := feed.Fetch(context.Background(), srv.URL, "")
 	require.NoError(t, err)
 	require.Len(t, items, 1)
-	assert.Equal(t, "https://tracker.example/dl/x.torrent", items[0].Enclosure)
+	assert.Equal(t, "https://tracker.example/dl/x.torrent", items[0].Link)
 }
 
 func TestMatch_FirstWins(t *testing.T) {

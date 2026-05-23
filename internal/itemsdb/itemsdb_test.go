@@ -2,11 +2,13 @@ package itemsdb_test
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/atomicstack/torrent-manager/internal/itemsdb"
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -143,4 +145,52 @@ func TestRecordEnqueue_Idempotent(t *testing.T) {
 	}
 	require.NoError(t, db.RecordEnqueue(ctx, e))
 	require.NoError(t, db.RecordEnqueue(ctx, e)) // dup -> upsert, no error
+}
+
+// TestMigration_DropsEnclosureColumn seeds a db file with the pre-rename
+// schema (items table with an enclosure column), opens it via the package's
+// Open, and confirms the column is gone after migration. Guards the
+// idempotent re-open path too.
+func TestMigration_DropsEnclosureColumn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "items.db")
+
+	// Hand-craft an old-shape items table (with enclosure column) using a
+	// raw sqlite handle so we exercise the migration path on next Open.
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = raw.Exec(`
+CREATE TABLE items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  feed_name TEXT NOT NULL, guid TEXT NOT NULL,
+  title TEXT NOT NULL, link TEXT, enclosure TEXT,
+  info_hash TEXT, matched_rule TEXT,
+  first_seen_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL,
+  UNIQUE(feed_name, guid)
+);`)
+	require.NoError(t, err)
+	_, err = raw.Exec(`INSERT INTO items (feed_name, guid, title, link, enclosure, first_seen_at, last_seen_at)
+VALUES ('f', 'g1', 't', 'L', 'E', 1, 1)`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+
+	// Open via the package; migration should drop the column.
+	db, err := itemsdb.Open(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	// PRAGMA inspection: the column must no longer exist.
+	probe, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	defer probe.Close()
+	var present int
+	require.NoError(t, probe.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('items') WHERE name = 'enclosure'`,
+	).Scan(&present))
+	assert.Equal(t, 0, present, "enclosure column should be gone post-migration")
+
+	// Existing row data still queryable (the data we don't keep is just gone).
+	got, err := db.List(context.Background(), itemsdb.ListQuery{IncludeEnqueued: true, Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "L", got[0].Link)
 }
