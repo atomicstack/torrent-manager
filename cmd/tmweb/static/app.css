@@ -211,6 +211,37 @@ th, td {
   cursor: pointer;
 }
 
+.modal-note {
+  margin: 0 0 0.5rem 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.modal-note code {
+  font-family: ui-monospace, monospace;
+  background: var(--border);
+  padding: 0 0.3rem;
+  border-radius: 3px;
+}
+.form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin: 0.5rem 0;
+}
+.form-row > span {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.form-row input[type=text] {
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+  padding: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+}
+
 /* mobile card layout */
 @media (max-width: 600px) {
   table, thead, tbody, tr, td, th { display: block; }

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/atomicstack/torrent-manager/internal/api"
 )
@@ -136,6 +137,36 @@ func (s *Seedctl) GetTorrentStatus(ctx context.Context, hash string) (api.Torren
 	default:
 		return api.TorrentStatus{}, false, fmt.Errorf("seedctl GET %s: status %d", u, resp.StatusCode)
 	}
+}
+
+// ListDirs hits GET /v1/dirs?root=<rootName>. Returns the immediate subdir
+// names under the configured root. 404 from seedctl (unknown root) is
+// surfaced as an empty list + nil error so callers can fall through to the
+// "user enters it manually" path without a special-case error type.
+func (s *Seedctl) ListDirs(ctx context.Context, rootName string) (api.DirsListResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	u := fmt.Sprintf("%s/v1/dirs?root=%s", s.base, url.QueryEscape(rootName))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return api.DirsListResponse{}, fmt.Errorf("seedctl GET %s: build request: %w", u, err)
+	}
+	resp, err := s.hc.Do(req)
+	if err != nil {
+		return api.DirsListResponse{}, fmt.Errorf("seedctl GET %s: %w", u, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return api.DirsListResponse{Dirs: []string{}}, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return api.DirsListResponse{}, fmt.Errorf("seedctl GET %s: status %d", u, resp.StatusCode)
+	}
+	var out api.DirsListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return api.DirsListResponse{}, fmt.Errorf("seedctl GET %s: decode: %w", u, err)
+	}
+	return out, nil
 }
 
 // PostTorrent uploads a .torrent body to POST /v1/torrents. The body is sent

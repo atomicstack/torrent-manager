@@ -174,3 +174,49 @@ func TestSeedctl_PostTorrent_Non2xxIsError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "status 422")
 }
+
+// TestSeedctl_ListDirs_OK exercises the happy path: seedctl returns a sorted
+// list of subdir names and ListDirs decodes them as-is.
+func TestSeedctl_ListDirs_OK(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/v1/dirs", r.URL.Path)
+		require.Equal(t, "tv", r.URL.Query().Get("root"))
+		_ = json.NewEncoder(w).Encode(api.DirsListResponse{Dirs: []string{"a", "b"}})
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewSeedctl(srv.URL, srv.Client())
+	out, err := c.ListDirs(context.Background(), "tv")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a", "b"}, out.Dirs)
+}
+
+// TestSeedctl_ListDirs_NotFoundIsEmpty confirms that 404 (unknown root) is
+// surfaced as an empty list, not an error — the no-rule flow can fall
+// through to the manual-edit form without a special-case error type.
+func TestSeedctl_ListDirs_NotFoundIsEmpty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewSeedctl(srv.URL, srv.Client())
+	out, err := c.ListDirs(context.Background(), "movies")
+	require.NoError(t, err)
+	assert.Empty(t, out.Dirs)
+}
+
+// TestSeedctl_ListDirs_5xxIsError ensures unexpected statuses surface as an
+// error (callers log + flag auto-pick failure rather than silently render
+// an empty proposal).
+func TestSeedctl_ListDirs_5xxIsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewSeedctl(srv.URL, srv.Client())
+	_, err := c.ListDirs(context.Background(), "tv")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "status 500")
+}

@@ -30,7 +30,7 @@ func muxFor(t *testing.T, base string, hc *http.Client, feeds []string) http.Han
 	t.Helper()
 	r, err := newRenderer()
 	require.NoError(t, err)
-	return newMux(NewSeedctl(base, hc), feeds, nil, savedir.Roots{}, nil, r)
+	return newMux(NewSeedctl(base, hc), feeds, nil, nil, nil, savedir.Roots{}, nil, r)
 }
 
 // TestHealthz_SeedctlUp spins up an httptest server impersonating a healthy
@@ -222,6 +222,7 @@ func TestEnqueueConfirm_RenderModal(t *testing.T) {
 	require.NoError(t, err)
 	mux := newMux(NewSeedctl(stub.URL, stub.Client()),
 		[]string{"TrackerA (TV)"},
+		nil, nil,
 		[]feed.ShowRule{fooRule()},
 		savedir.Roots{TV: "/t/tv"},
 		nil,
@@ -237,14 +238,13 @@ func TestEnqueueConfirm_RenderModal(t *testing.T) {
 	assert.Contains(t, body, `hx-post="/api/enqueue`, "confirm button POSTs back to /api/enqueue")
 }
 
-// TestEnqueueConfirm_NoRule covers the case where the item has no matched
-// rule (phase 3 will fill this with a manual flow). The button on the row
-// is disabled but if someone forces the request directly we still render a
-// useful modal — not silently dismiss.
-func TestEnqueueConfirm_NoRule(t *testing.T) {
+// TestEnqueueConfirm_NoRule_OtherCategory covers the "other" branch of the
+// no-rule flow: the modal renders with an empty save_dir input (no auto
+// proposal, no auto-pick failure note — it's just a freeform field).
+func TestEnqueueConfirm_NoRule_OtherCategory(t *testing.T) {
 	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(api.ItemsListResponse{Items: []api.ItemRecord{
-			{FeedName: "TrackerA (TV)", GUID: "g1", Title: "Random.Release.1080p", LastSeenAt: time.Now().Unix()},
+			{FeedName: "TrackerA (Other)", GUID: "g1", Title: "Random.Release.1080p", LastSeenAt: time.Now().Unix()},
 		}})
 	}))
 	t.Cleanup(stub.Close)
@@ -252,15 +252,156 @@ func TestEnqueueConfirm_NoRule(t *testing.T) {
 	r, err := newRenderer()
 	require.NoError(t, err)
 	mux := newMux(NewSeedctl(stub.URL, stub.Client()),
-		[]string{"TrackerA (TV)"}, []feed.ShowRule{fooRule()},
+		[]string{"TrackerA (Other)"}, nil,
+		map[string]string{"TrackerA (Other)": "other"},
+		[]feed.ShowRule{fooRule()},
 		savedir.Roots{TV: "/t/tv"}, nil, r)
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet,
-		"/api/enqueue-confirm?feed=TrackerA%20(TV)&guid=g1", nil))
+		"/api/enqueue-confirm?feed=TrackerA%20(Other)&guid=g1", nil))
 	require.Equal(t, http.StatusOK, rr.Code)
 	body := rr.Body.String()
-	assert.Contains(t, body, "no rule")
-	assert.Contains(t, body, "phase 3")
+	assert.Contains(t, body, "no watchlist rule matched")
+	assert.Contains(t, body, `name="save_dir"`, "must include editable save_dir input")
+	assert.Contains(t, body, `value=""`, "no proposed dir for the 'other' category")
+}
+
+// TestEnqueueConfirm_NoRule_TV_ClaudeProposes is the live-Claude happy
+// path. We can't inject a fake aiclassify.Client without refactoring the
+// type, and we don't want unit tests to depend on a live API. The
+// AutoPickFailed test below covers the structural path; this skip is a
+// placeholder so the intent is documented next to its sibling tests.
+func TestEnqueueConfirm_NoRule_TV_ClaudeProposes(t *testing.T) {
+	t.Skip("covered by AutoPickFailed test; live ai not exercised in unit tests")
+}
+
+// TestEnqueueConfirm_NoRule_TV_AutoPickFailed_RendersEditable covers the
+// tv branch when ai is nil (ANTHROPIC_API_KEY unset). The modal renders
+// with auto-classify-failed messaging and an empty editable save_dir
+// input so the user can fill it in.
+func TestEnqueueConfirm_NoRule_TV_AutoPickFailed_RendersEditable(t *testing.T) {
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/items" {
+			_ = json.NewEncoder(w).Encode(api.ItemsListResponse{Items: []api.ItemRecord{
+				{FeedName: "TrackerB (TV)", GUID: "g1", Title: "Severance.S02E01.1080p", LastSeenAt: time.Now().Unix()},
+			}})
+			return
+		}
+		if r.URL.Path == "/v1/dirs" {
+			_ = json.NewEncoder(w).Encode(api.DirsListResponse{Dirs: []string{"severance"}})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(stub.Close)
+
+	r, err := newRenderer()
+	require.NoError(t, err)
+	mux := newMux(NewSeedctl(stub.URL, stub.Client()),
+		[]string{"TrackerB (TV)"}, nil,
+		map[string]string{"TrackerB (TV)": "tv"},
+		nil, savedir.Roots{TV: "/t/tv"},
+		nil, // ai nil → auto-pick failed
+		r)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet,
+		"/api/enqueue-confirm?feed=TrackerB+%28TV%29&guid=g1", nil))
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := rr.Body.String()
+	assert.Contains(t, body, "no watchlist rule matched")
+	assert.Contains(t, body, "auto-classify failed")
+	assert.Contains(t, body, `name="save_dir"`, "must include editable save_dir input")
+	assert.Contains(t, body, `value=""`, "no proposed dir when auto-pick failed")
+}
+
+// TestEnqueueConfirm_NoRule_Movies covers the movies branch: the modal
+// pre-fills the save_dir with roots.Movies (no subdir convention for
+// movies — the user can extend the path if they want a per-film dir).
+func TestEnqueueConfirm_NoRule_Movies(t *testing.T) {
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/items" {
+			_ = json.NewEncoder(w).Encode(api.ItemsListResponse{Items: []api.ItemRecord{
+				{FeedName: "TrackerB (Movies)", GUID: "m1", Title: "Blade.Runner.2049.2160p"},
+			}})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(stub.Close)
+	r, err := newRenderer()
+	require.NoError(t, err)
+	mux := newMux(NewSeedctl(stub.URL, stub.Client()),
+		[]string{"TrackerB (Movies)"}, nil,
+		map[string]string{"TrackerB (Movies)": "movies"},
+		nil, savedir.Roots{Movies: "/t/movies"},
+		nil, r)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet,
+		"/api/enqueue-confirm?feed=TrackerB+%28Movies%29&guid=m1", nil))
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := rr.Body.String()
+	assert.Contains(t, body, `value="/t/movies"`, "movies path pre-fills the root")
+}
+
+// TestEnqueueDo_NoRule_AcceptsFormSaveDir confirms the POST handler reads
+// save_dir from the form (not from any server-side derivation). This is
+// what lets the no-rule flow (and a future user-edited rule-matched flow)
+// override the proposed dir.
+func TestEnqueueDo_NoRule_AcceptsFormSaveDir(t *testing.T) {
+	info := metainfo.Info{
+		PieceLength: 16384,
+		Pieces:      make([]byte, 20),
+		Name:        "x.mkv",
+		Length:      1,
+	}
+	infoBytes, err := bencode.Marshal(info)
+	require.NoError(t, err)
+	mi := metainfo.MetaInfo{InfoBytes: infoBytes}
+	torrentBytes, err := bencode.Marshal(mi)
+	require.NoError(t, err)
+
+	tracker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(torrentBytes)
+	}))
+	t.Cleanup(tracker.Close)
+
+	var posted struct {
+		hash    string
+		saveDir string
+		body    []byte
+	}
+	seedctl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/items":
+			_ = json.NewEncoder(w).Encode(api.ItemsListResponse{Items: []api.ItemRecord{
+				{FeedName: "TrackerB (TV)", GUID: "g1", Title: "X.S01E01", Link: tracker.URL + "/.torrent", LastSeenAt: time.Now().Unix()},
+			}})
+		case "/v1/torrents":
+			posted.hash = r.Header.Get("X-Info-Hash")
+			posted.saveDir = r.Header.Get("X-Save-Directory")
+			posted.body, _ = io.ReadAll(r.Body)
+			_ = json.NewEncoder(w).Encode(api.AddTorrentResponse{InfoHash: posted.hash, Added: true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(seedctl.Close)
+
+	r, err := newRenderer()
+	require.NoError(t, err)
+	mux := newMux(NewSeedctl(seedctl.URL, seedctl.Client()),
+		[]string{"TrackerB (TV)"}, nil,
+		map[string]string{"TrackerB (TV)": "tv"},
+		nil, savedir.Roots{TV: "/t/tv"},
+		nil, r)
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/enqueue?feed=TrackerB+%28TV%29&guid=g1",
+		strings.NewReader("save_dir=/custom/path"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, "/custom/path", posted.saveDir, "user-entered save_dir forwarded to seedctl")
 }
 
 // TestEnqueueDo_PostsToSeedctlAndRendersTable is the full happy-path
@@ -333,18 +474,25 @@ func TestEnqueueDo_PostsToSeedctlAndRendersTable(t *testing.T) {
 	require.NoError(t, err)
 	mux := newMux(NewSeedctl(seedctl.URL, seedctl.Client()),
 		[]string{"TrackerA (TV)"},
+		nil, nil,
 		[]feed.ShowRule{fooRule()},
 		savedir.Roots{TV: "/t/tv"},
 		nil,
 		r,
 	)
 	rr := httptest.NewRecorder()
-	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodPost,
-		"/api/enqueue?feed=TrackerA%20(TV)&guid=g1", nil))
+	// the rule-matched modal posts back with the derived save_dir as a
+	// hidden input; mirror that here so the handler picks it up via the
+	// form field (matches the production flow).
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/enqueue?feed=TrackerA%20(TV)&guid=g1",
+		strings.NewReader("save_dir=/t/tv/foo/season1"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	mux.ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
 
 	assert.Equal(t, expectedHash, seedctlPosted.hash, "info hash forwarded to seedctl")
-	assert.Equal(t, "/t/tv/foo/season1", seedctlPosted.saveDir, "save_dir derived correctly")
+	assert.Equal(t, "/t/tv/foo/season1", seedctlPosted.saveDir, "save_dir forwarded from form")
 	assert.Equal(t, torrentBytes, seedctlPosted.body, "raw .torrent bytes forwarded")
 
 	// The response body is a re-rendered table-rows fragment.
@@ -382,7 +530,8 @@ func TestEnqueueDo_TrackerFailureRendersErrorRow(t *testing.T) {
 	r, err := newRenderer()
 	require.NoError(t, err)
 	mux := newMux(NewSeedctl(seedctl.URL, seedctl.Client()),
-		[]string{"TrackerA (TV)"}, []feed.ShowRule{fooRule()},
+		[]string{"TrackerA (TV)"}, nil, nil,
+		[]feed.ShowRule{fooRule()},
 		savedir.Roots{TV: "/t/tv"}, nil, r)
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodPost,

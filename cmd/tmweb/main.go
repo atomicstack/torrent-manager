@@ -25,9 +25,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
+	"github.com/atomicstack/torrent-manager/internal/aiclassify"
 	"github.com/atomicstack/torrent-manager/internal/api"
 	"github.com/atomicstack/torrent-manager/internal/feed"
 	"github.com/atomicstack/torrent-manager/internal/savedir"
@@ -65,6 +67,15 @@ func main() {
 	feeds := feedNames(file)
 	roots := savedir.Roots{TV: file.Roots.TV, Movies: file.Roots.Movies}
 	cookieEnvs := cookieEnvMap(file)
+	feedCats := feedCategoryMap(file)
+
+	// aiclassify is optional: without ANTHROPIC_API_KEY the no-rule tv path
+	// renders the modal with an empty save_dir + a note that auto-classify
+	// failed. tmweb still works for rule-matched + movies + other paths.
+	var ai *aiclassify.Client
+	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
+		ai = aiclassify.New(key)
+	}
 
 	tlsCfg, err := tlsx.ClientConfig(*caPath, *certPath, *keyPath)
 	if err != nil {
@@ -82,7 +93,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              *listenAddr,
-		Handler:           newMux(seedctl, feeds, shows, roots, cookieEnvs, r),
+		Handler:           newMux(seedctl, feeds, cookieEnvs, feedCats, shows, roots, ai, r),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -129,23 +140,57 @@ func cookieEnvMap(f *watchlist.File) map[string]string {
 	return out
 }
 
+// feedCategoryMap builds a feed-name -> category lookup ("tv" | "movies" |
+// "other"). Used by the no-rule enqueue flow to decide how to propose a
+// save_dir. Feeds with no category declared are omitted (the handler treats
+// absence as "other" — user enters the dir manually).
+func feedCategoryMap(f *watchlist.File) map[string]string {
+	out := make(map[string]string, len(f.Feeds))
+	for _, ff := range f.Feeds {
+		if ff.Name != "" && ff.Category != "" {
+			out[ff.Name] = ff.Category
+		}
+	}
+	return out
+}
+
 // handler bundles the dependencies the http endpoints need. Bundling them
 // into a struct keeps newMux signature stable as endpoints are added and
 // makes the handlers trivially testable with stubbed seedctl + in-memory
 // watchlist fixtures.
 type handler struct {
-	seedctl    *Seedctl
-	feeds      []string          // for the dropdown
-	shows      []feed.ShowRule   // for rule matching at enqueue time
-	roots      savedir.Roots     // for savedir.Derive
-	cookieEnvs map[string]string // feedName -> CookieEnv (e.g. "TrackerA (TV)" -> "COOKIE_TRACKER_A")
-	r          *renderer
+	seedctl        *Seedctl
+	feeds          []string           // for the dropdown
+	shows          []feed.ShowRule    // for rule matching at enqueue time
+	roots          savedir.Roots      // for savedir.Derive
+	cookieEnvs     map[string]string  // feedName -> CookieEnv (e.g. "TrackerA (TV)" -> "COOKIE_TRACKER_A")
+	feedCategories map[string]string  // feedName -> "tv"|"movies"|"other" (no-rule flow)
+	ai             *aiclassify.Client // nil if ANTHROPIC_API_KEY unset; no-rule tv path falls back to manual entry
+	r              *renderer
 }
 
 // newMux wires the http routes for tmweb. Extracted from main so tests can
 // instantiate a handler against a stubbed *Seedctl with a known feed list.
-func newMux(s *Seedctl, feeds []string, shows []feed.ShowRule, roots savedir.Roots, cookieEnvs map[string]string, r *renderer) http.Handler {
-	h := &handler{seedctl: s, feeds: feeds, shows: shows, roots: roots, cookieEnvs: cookieEnvs, r: r}
+func newMux(
+	s *Seedctl,
+	feeds []string,
+	cookieEnvs map[string]string,
+	feedCategories map[string]string,
+	shows []feed.ShowRule,
+	roots savedir.Roots,
+	ai *aiclassify.Client,
+	r *renderer,
+) http.Handler {
+	h := &handler{
+		seedctl:        s,
+		feeds:          feeds,
+		shows:          shows,
+		roots:          roots,
+		cookieEnvs:     cookieEnvs,
+		feedCategories: feedCategories,
+		ai:             ai,
+		r:              r,
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, req *http.Request) {
@@ -217,10 +262,16 @@ func (h *handler) search(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
-// enqueueConfirm renders the modal fragment for a rule-matched enqueue.
-// Looks up the item by (feed, guid), re-derives the save_dir, and pushes
-// it through the _confirm.html template. Errors render as a tiny modal
-// card with an error message so the user always sees something on click.
+// enqueueConfirm renders the modal fragment for the enqueue flow. Branches
+// on whether the item has a matched watchlist rule:
+//   - rule-matched   → _confirm.html, save_dir pre-derived from the rule.
+//   - no rule, movies → _confirm_norule.html with roots.Movies pre-filled.
+//   - no rule, tv     → ask seedctl for the existing tv dirs, then claude for
+//     a best-fit show dir + season. render _confirm_norule.html with the
+//     proposed path; if any step fails, leave the field empty + flag
+//     auto-pick failure so the user knows to fill it in by hand.
+//   - no rule, other  → _confirm_norule.html with an empty save_dir; the
+//     user can type one or leave blank for rtorrent's default.
 func (h *handler) enqueueConfirm(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	q := req.URL.Query()
@@ -229,12 +280,16 @@ func (h *handler) enqueueConfirm(w http.ResponseWriter, req *http.Request) {
 		renderModalError(w, "lookup failed", err.Error())
 		return
 	}
-	if it.MatchedRule == "" {
-		// phase 3 will replace this with the Claude-driven manual flow.
-		renderModalError(w, "no rule",
-			"this item has no matching watchlist rule. phase 3 will support manual enqueue.")
+	if it.MatchedRule != "" {
+		h.confirmRuleMatched(w, it)
 		return
 	}
+	h.confirmNoRule(w, req.Context(), it)
+}
+
+// confirmRuleMatched is the original rule-matched path: re-derive the
+// save_dir from the watchlist rule and render the _confirm.html modal.
+func (h *handler) confirmRuleMatched(w http.ResponseWriter, it api.ItemRecord) {
 	rule := h.findRule(it.MatchedRule)
 	if rule == nil {
 		renderModalError(w, "rule missing",
@@ -250,10 +305,74 @@ func (h *handler) enqueueConfirm(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
+// confirmNoRule renders the _confirm_norule.html modal with a category-
+// specific proposed save_dir. Any failure to compute the proposal (ai
+// disabled, seedctl down, claude error, missing roots) renders the same
+// modal with an empty field + AutoPickFailed=true so the user always has
+// somewhere to type the path.
+func (h *handler) confirmNoRule(w http.ResponseWriter, ctx context.Context, it api.ItemRecord) {
+	category := h.feedCategories[it.FeedName]
+	data := struct {
+		Item            api.ItemRecord
+		Category        string
+		ProposedSaveDir string
+		ClaudePicked    bool
+		AutoPickFailed  bool
+	}{Item: it, Category: category}
+
+	switch category {
+	case "movies":
+		// movies just live under roots.Movies — no subdir convention. We
+		// still surface the path in an editable input so the user can drop
+		// the release into a per-film subdir if they want one.
+		data.ProposedSaveDir = h.roots.Movies
+	case "tv":
+		if h.ai == nil {
+			// ANTHROPIC_API_KEY missing: skip the claude call and let the
+			// user enter the dir manually.
+			data.AutoPickFailed = true
+			break
+		}
+		dirs, err := h.seedctl.ListDirs(ctx, "tv")
+		if err != nil {
+			// seedctl down or 5xx: don't block the user, just flag it.
+			slog.Warn("list_dirs_failed", "err", err)
+			data.AutoPickFailed = true
+			break
+		}
+		res, err := h.ai.PickDir(ctx, it.Title, dirs.Dirs)
+		if err != nil {
+			// claude error or malformed response: fall back to manual.
+			slog.Warn("aiclassify_pickdir_failed", "title", it.Title, "err", err)
+			data.AutoPickFailed = true
+			break
+		}
+		if h.roots.TV != "" && res.ShowDir != "" && res.Season > 0 {
+			data.ProposedSaveDir = filepath.Join(h.roots.TV, res.ShowDir, fmt.Sprintf("season%d", res.Season))
+			data.ClaudePicked = true
+		} else {
+			// claude couldn't figure out a show+season (or roots.TV unset).
+			data.AutoPickFailed = true
+		}
+	default:
+		// "other" / unknown: no automatic proposal. User enters something
+		// or leaves it blank to inherit rtorrent's default download dir.
+	}
+	if err := h.r.confirmNoRule.Execute(w, data); err != nil {
+		slog.Error("render_confirm_norule", "err", err)
+	}
+}
+
 // enqueueDo executes the enqueue: fetch the .torrent, compute the hash if
-// missing, POST to seedctl, then re-render the table body so the row picks
-// up its new "auto-enqueued" badge. On failure we return an error row so
-// the user sees the cause inline instead of a silent no-op.
+// missing, POST to seedctl with the user-confirmed save_dir, then re-render
+// the table body so the row picks up its new "auto-enqueued" badge. On
+// failure we return an error row so the user sees the cause inline instead
+// of a silent no-op.
+//
+// The save_dir comes from the modal form (both rule-matched and no-rule
+// paths post a "save_dir" field). An empty value means "don't send
+// X-Save-Directory" — seedctl/rtorrent fall back to the default download
+// dir.
 func (h *handler) enqueueDo(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	q := req.URL.Query()
@@ -262,16 +381,11 @@ func (h *handler) enqueueDo(w http.ResponseWriter, req *http.Request) {
 		h.renderEnqueueError(w, fmt.Sprintf("lookup: %s", err))
 		return
 	}
-	if it.MatchedRule == "" {
-		h.renderEnqueueError(w, "no matching watchlist rule (phase 3 will support manual enqueue)")
+	if err := req.ParseForm(); err != nil {
+		h.renderEnqueueError(w, fmt.Sprintf("parse form: %s", err))
 		return
 	}
-	rule := h.findRule(it.MatchedRule)
-	if rule == nil {
-		h.renderEnqueueError(w, fmt.Sprintf("watchlist rule %q no longer present", it.MatchedRule))
-		return
-	}
-	saveDir, _ := savedir.Derive(h.roots, *rule, it.Title)
+	saveDir := req.PostForm.Get("save_dir")
 
 	// fetchTorrent uses http.DefaultClient because tracker URLs are served
 	// off public CA, NOT mTLS. The cookie comes from the per-feed env var
@@ -298,7 +412,8 @@ func (h *handler) enqueueDo(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	slog.Info("manual_enqueue_done",
-		"feed", it.FeedName, "guid", it.GUID, "hash", hash, "save_dir", saveDir)
+		"feed", it.FeedName, "guid", it.GUID, "hash", hash,
+		"save_dir", saveDir, "had_rule", it.MatchedRule != "")
 
 	// re-render the whole table so the row picks up its new badge. The
 	// source written by seedctl is "auto" — phase 3 may switch this to

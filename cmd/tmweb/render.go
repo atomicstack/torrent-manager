@@ -32,9 +32,10 @@ var funcMap = template.FuncMap{
 // by htmx after each search; confirm is the modal fragment swapped into the
 // #modal portal div by the enqueue-confirm flow.
 type renderer struct {
-	layout  *template.Template
-	rows    *template.Template
-	confirm *template.Template
+	layout        *template.Template
+	rows          *template.Template
+	confirm       *template.Template
+	confirmNoRule *template.Template
 }
 
 // newRenderer parses the embedded templates and returns a ready-to-execute
@@ -53,7 +54,11 @@ func newRenderer() (*renderer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse confirm: %w", err)
 	}
-	return &renderer{layout: layout, rows: rows, confirm: confirm}, nil
+	confirmNoRule, err := template.New("_confirm_norule.html").Funcs(funcMap).ParseFS(templatesFS, "templates/_confirm_norule.html")
+	if err != nil {
+		return nil, fmt.Errorf("parse confirm_norule: %w", err)
+	}
+	return &renderer{layout: layout, rows: rows, confirm: confirm, confirmNoRule: confirmNoRule}, nil
 }
 
 // humanAgo returns a coarse human-readable relative time given a unix-seconds
