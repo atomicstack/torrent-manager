@@ -39,5 +39,33 @@
     </table>
   </main>
   <div id="modal"></div>
+  <script>
+  // rewrite the timestamp tooltips into the browser's local timezone so the
+  // user sees a familiar offset instead of UTC. The server emits the unix
+  // epoch in data-ts plus a UTC fallback in title, so anyone with JS off
+  // still gets a usable tooltip.
+  (function () {
+    function pad(n) { return String(n).padStart(2, '0'); }
+    function localISO(d) {
+      var tz = -d.getTimezoneOffset(); // minutes east of UTC
+      var sign = tz >= 0 ? '+' : '-';
+      var abs = Math.abs(tz);
+      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
+        + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds())
+        + sign + pad(Math.floor(abs / 60)) + ':' + pad(abs % 60);
+    }
+    function rewrite(scope) {
+      (scope || document).querySelectorAll('[data-ts]').forEach(function (el) {
+        var ts = parseInt(el.dataset.ts, 10);
+        if (!ts) return;
+        el.title = localISO(new Date(ts * 1000));
+      });
+    }
+    document.addEventListener('DOMContentLoaded', function () { rewrite(document); });
+    // htmx fires htmx:load for every newly-added subtree (each swap of #rows
+    // counts), so the rewrite runs against the freshly-rendered table body.
+    document.body.addEventListener('htmx:load', function (e) { rewrite(e.target); });
+  })();
+  </script>
 </body>
 </html>
