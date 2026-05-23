@@ -415,11 +415,15 @@ func (h *handler) confirmRuleMatched(w http.ResponseWriter, ctx context.Context,
 		CommonRoot:  h.commonRoot,
 		Completions: h.collectCompletions(ctx),
 	}
-	// cache hit (e.g. user opened a no-rule classify earlier on the same
-	// item, or this is a re-open within the ttl) → surface size + contents
-	// rows immediately instead of waiting for the submit fetch.
-	if e, ok := h.torrents.Get(it.FeedName, it.GUID); ok {
+	// fetch + parse the .torrent on modal open so size + contents are
+	// visible immediately, without waiting for the user to click ✨.
+	// ensureTorrentCached short-circuits on a cache hit, so this is only
+	// slow on the very first open per item per pod lifetime. on error we
+	// log and render without meta — the modal is still useful.
+	if e, ferr := h.ensureTorrentCached(ctx, it); ferr == nil {
 		data.Meta = toTorrentMeta(e.Meta)
+	} else {
+		slog.Warn("modal_meta_fetch_failed", "feed", it.FeedName, "guid", it.GUID, "err", ferr)
 	}
 	if err := h.r.confirm.Execute(w, data); err != nil {
 		slog.Error("render_confirm", "err", err)
@@ -515,12 +519,15 @@ func (h *handler) confirmNoRule(w http.ResponseWriter, ctx context.Context, it a
 	default:
 		// "other" / unknown: empty field, no icon.
 	}
-	// cache hit → surface size + contents rows on initial modal render
-	// (e.g. user already clicked ✨ for this item earlier within the ttl
-	// and is re-opening). no fetch on modal-open — only show what's
-	// already there.
-	if e, ok := h.torrents.Get(it.FeedName, it.GUID); ok {
+	// fetch + parse the .torrent on modal open so size + contents are
+	// visible immediately, without waiting for the user to click ✨.
+	// ensureTorrentCached short-circuits on a cache hit, so this is only
+	// slow on the very first open per item per pod lifetime. on error we
+	// log and render without meta — the modal is still useful.
+	if e, ferr := h.ensureTorrentCached(ctx, it); ferr == nil {
 		data.Meta = toTorrentMeta(e.Meta)
+	} else {
+		slog.Warn("modal_meta_fetch_failed", "feed", it.FeedName, "guid", it.GUID, "err", ferr)
 	}
 	if err := h.r.confirmNoRule.Execute(w, data); err != nil {
 		slog.Error("render_confirm_norule", "err", err)
