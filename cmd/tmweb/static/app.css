@@ -338,6 +338,11 @@ th, td {
 .enqueue-progress { display: none; }
 form.htmx-request .modal-actions { display: none; }
 form.htmx-request .enqueue-progress { display: block; }
+/* the wrapper above is what gets revealed by the htmx-request class; the
+   nested .classify-loading shares its display:none default with the
+   classify-flow variant, so it needs its own un-hide rule for the submit
+   path or the bar + step list never paint. */
+form.htmx-request .enqueue-progress .classify-loading { display: block; }
 
 .step-list {
   list-style: none;
