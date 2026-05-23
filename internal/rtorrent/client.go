@@ -17,10 +17,23 @@ var ErrNotFound = errors.New("rtorrent: torrent not found")
 // purpose is to keep one rtorrent xmlrpc invocation from racing another at
 // the wire level — rtorrent's handler is not robustly concurrent at low ops/sec
 // — not to provide higher-level transaction semantics.
+//
+// Always pass *Client around, never Client by value: the embedded noCopy
+// sentinel makes `go vet` catch accidental copies (which would duplicate
+// the mutex and break the serialisation guarantee).
 type Client struct {
+	_    noCopy
 	addr string
 	mu   sync.Mutex
 }
+
+// noCopy marks Client as non-copyable post-construction. go vet's copylocks
+// check picks up the Lock/Unlock methods and flags any value copy. Same
+// pattern sync.WaitGroup, sync.Mutex, and strings.Builder use internally.
+type noCopy struct{}
+
+func (*noCopy) Lock()   {}
+func (*noCopy) Unlock() {}
 
 // NewClient returns a Client that dials addr (tcp host:port) for each call.
 func NewClient(addr string) *Client {
