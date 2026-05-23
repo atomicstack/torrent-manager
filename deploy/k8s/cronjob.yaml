@@ -41,7 +41,7 @@ spec:
                 - --ca=/etc/tmgr/tls/ca.crt
                 - --cert=/etc/tmgr/tls/client.crt
                 - --key=/etc/tmgr/tls/client.key
-                - --cache-file=/var/cache/tmgr/seen.json
+                - --cache-file=/var/cache/tmgr/seen.db
                 # safety throttle. flip to --mode=fetch once observe logs look right,
                 # then to --mode=enqueue (or drop the flag — enqueue is the default).
                 - --mode=enqueue

@@ -3,7 +3,7 @@
 SEEDCTL_HOST ?= tiny.example.com
 IMAGE ?= ghcr.io/atomicstack/tmgr
 TAG ?= dev
-LOCAL_IMAGE ?= local/tmgr:latest
+LOCAL_IMAGE ?= docker.io/local/tmgr:latest
 K3S_NODES ?= node-1.local node-2.local
 
 help: ## list targets
@@ -37,10 +37,10 @@ image: build-tmgr ## build the tmgr container image (arm64) via docker
 push: image ## push the tmgr image
 	docker push $(IMAGE):$(TAG)
 
-image-local: ## build tmgr image to dist/tmgr-image.tar via ko (no docker required)
+image-local: ## build tmgr arm64 image into dist/tmgr-image.tar (podman; cgo)
 	mkdir -p dist
-	KO_DOCKER_REPO=local/tmgr ko build --platform=linux/arm64 --bare \
-	  --push=false --tarball=dist/tmgr-image.tar ./cmd/tmgr
+	podman build --platform=linux/arm64 -t $(LOCAL_IMAGE) -f Dockerfile .
+	podman save --format docker-archive -o dist/tmgr-image.tar $(LOCAL_IMAGE)
 
 image-import: image-local ## scp dist/tmgr-image.tar and import on each k3s node
 	@for h in $(K3S_NODES); do \
