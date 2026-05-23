@@ -8,40 +8,12 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"regexp"
 	"strings"
 
-	"github.com/atomicstack/torrent-manager/internal/feed"
 	"github.com/atomicstack/torrent-manager/internal/hashcache"
 	"github.com/atomicstack/torrent-manager/internal/tlsx"
-	"gopkg.in/yaml.v3"
+	"github.com/atomicstack/torrent-manager/internal/watchlist"
 )
-
-type fileFeed struct {
-	Name         string `yaml:"name,omitempty"`
-	URL          string `yaml:"url"`
-	CookieEnv    string `yaml:"cookie_env,omitempty"`
-	Category     string `yaml:"category,omitempty"`
-	TitleExtract string `yaml:"title_extract,omitempty"`
-}
-
-type fileRoots struct {
-	TV     string `yaml:"tv"`
-	Movies string `yaml:"movies"`
-}
-
-type fileConfig struct {
-	SeedctlURL string    `yaml:"seedctl_url"`
-	Roots      fileRoots `yaml:"roots"`
-	Shows      []struct {
-		Name      string   `yaml:"name"`
-		Regex     string   `yaml:"regex"`
-		Category  string   `yaml:"category,omitempty"`
-		Directory string   `yaml:"directory,omitempty"`
-		Feeds     []string `yaml:"feeds,omitempty"`
-	} `yaml:"shows"`
-	Feeds []fileFeed `yaml:"feeds"`
-}
 
 func main() {
 	watchPath := flag.String("watchlist", "/etc/tmgr/watchlist.yaml", "watchlist config")
@@ -68,52 +40,23 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	b, err := os.ReadFile(*watchPath)
+	file, err := watchlist.Load(*watchPath)
 	if err != nil {
-		logger.Error("read watchlist", "err", err)
+		logger.Error("load watchlist", "err", err)
 		os.Exit(1)
 	}
-	var fc fileConfig
-	if err := yaml.Unmarshal(b, &fc); err != nil {
-		logger.Error("parse watchlist", "err", err)
+	shows, titleExtracts, err := watchlist.Compile(file)
+	if err != nil {
+		logger.Error("compile watchlist", "err", err)
 		os.Exit(1)
 	}
 
-	feedNames := make(map[string]struct{}, len(fc.Feeds))
-	for _, ff := range fc.Feeds {
-		if ff.Name != "" {
-			feedNames[ff.Name] = struct{}{}
-		}
-	}
-
-	shows := make([]feed.ShowRule, 0, len(fc.Shows))
-	for _, s := range fc.Shows {
-		re, err := regexp.Compile(s.Regex)
-		if err != nil {
-			logger.Error("bad regex", "name", s.Name, "err", err)
-			os.Exit(1)
-		}
-		for _, fn := range s.Feeds {
-			if _, ok := feedNames[fn]; !ok {
-				logger.Error("show rule references unknown feed",
-					"rule", s.Name, "feed", fn)
-				os.Exit(1)
-			}
-		}
-		shows = append(shows, feed.ShowRule{
-			Name:      s.Name,
-			Regex:     re,
-			Category:  s.Category,
-			Directory: s.Directory,
-			Feeds:     s.Feeds,
-		})
-	}
-
-	feeds := make([]Feed, 0, len(fc.Feeds))
-	// dedup cookie-env log lines — multiple feeds typically share one cookie_env,
-	// so emit one tracker_cookie / cookie_env-missing record per env name.
-	loggedCookieEnv := make(map[string]struct{}, len(fc.Feeds))
-	for _, ff := range fc.Feeds {
+	// Build runtime Feed structs. Cookie env lookup + per-env-dedup logging is
+	// a tmgr-runtime concern (touches os.Getenv and the tmgr logger), so it
+	// stays here rather than inside the watchlist package.
+	loggedCookieEnv := make(map[string]struct{}, len(file.Feeds))
+	feeds := make([]Feed, 0, len(file.Feeds))
+	for i, ff := range file.Feeds {
 		var cookie string
 		if ff.CookieEnv != "" {
 			cookie = os.Getenv(ff.CookieEnv)
@@ -133,26 +76,12 @@ func main() {
 				}
 			}
 		}
-		var titleExtract *regexp.Regexp
-		if ff.TitleExtract != "" {
-			re, err := regexp.Compile(ff.TitleExtract)
-			if err != nil {
-				logger.Error("bad title_extract regex", "feed", ff.Name, "err", err)
-				os.Exit(1)
-			}
-			if re.NumSubexp() != 1 {
-				logger.Error("title_extract must have exactly one capture group",
-					"feed", ff.Name, "groups", re.NumSubexp())
-				os.Exit(1)
-			}
-			titleExtract = re
-		}
 		feeds = append(feeds, Feed{
 			Name:         ff.Name,
 			URL:          ff.URL,
 			Cookie:       cookie,
 			Category:     ff.Category,
-			TitleExtract: titleExtract,
+			TitleExtract: titleExtracts[i],
 		})
 	}
 
@@ -202,12 +131,12 @@ func main() {
 	}
 
 	cfg := Config{
-		SeedctlURL: fc.SeedctlURL,
+		SeedctlURL: file.SeedctlURL,
 		Feeds:      feeds,
 		Shows:      shows,
 		Roots: Roots{
-			TV:     fc.Roots.TV,
-			Movies: fc.Roots.Movies,
+			TV:     file.Roots.TV,
+			Movies: file.Roots.Movies,
 		},
 		AnthropicKey: anthropicKey,
 		Mode:         mode,
