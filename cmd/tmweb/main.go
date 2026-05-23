@@ -35,6 +35,7 @@ import (
 	"github.com/atomicstack/torrent-manager/internal/feed"
 	"github.com/atomicstack/torrent-manager/internal/savedir"
 	"github.com/atomicstack/torrent-manager/internal/tlsx"
+	"github.com/atomicstack/torrent-manager/internal/torrent"
 	"github.com/atomicstack/torrent-manager/internal/watchlist"
 )
 
@@ -246,7 +247,12 @@ type handler struct {
 	// the common root — and expand it back to absolute on POST. Empty when
 	// the two roots don't share a parent (degrades to absolute paths).
 	commonRoot string
-	r          *renderer
+	// torrents holds the .torrent bytes + parsed meta + info hash for items
+	// the user is currently classifying/enqueueing. populated by
+	// enqueueClassify (so claude gets the layout) and consumed by enqueueDo
+	// (so we don't refetch from the tracker twice in a row).
+	torrents *torrentCache
+	r        *renderer
 }
 
 // newMux wires the http routes for tmweb. Extracted from main so tests can
@@ -270,7 +276,11 @@ func newMux(
 		feedCategories: feedCategories,
 		ai:             ai,
 		commonRoot:     computeCommonRoot(roots),
-		r:              r,
+		// classify → enqueue handoff is normally a few seconds; 5 minutes
+		// covers slow modal review without holding bytes indefinitely. 50
+		// entries × ~100KB/.torrent = ~5MiB worst case.
+		torrents: newTorrentCache(50, 5*time.Minute),
+		r:        r,
 	}
 
 	mux := http.NewServeMux()
@@ -445,10 +455,12 @@ func (h *handler) confirmNoRule(w http.ResponseWriter, ctx context.Context, it a
 }
 
 // enqueueClassify is triggered when the user clicks the ✨ icon next to the
-// save_dir input. It asks seedctl for the existing tv dirs, asks claude to
-// pick the best fit + extract the season, and returns the _enqueue_form_row
-// partial (notes + label + input + icon) for an outerHTML swap. Always 200
-// — a row that includes "auto-classify failed" is still useful.
+// save_dir input. It fetches the .torrent (caching the bytes + parsed
+// contents + info hash for the subsequent enqueue POST), asks seedctl for
+// the existing tv dirs, asks claude to pick a show + season subdir from
+// both the title AND the torrent's actual file layout, then returns the
+// _enqueue_form_row partial for an outerHTML swap. Always 200 — a row that
+// includes "auto-classify failed" is still useful.
 func (h *handler) enqueueClassify(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	q := req.URL.Query()
@@ -465,27 +477,89 @@ func (h *handler) enqueueClassify(w http.ResponseWriter, req *http.Request) {
 		ClaudeAvailable: h.ai != nil,
 		CommonRoot:      h.commonRoot,
 	}
-	if h.ai == nil {
+
+	switch {
+	case h.ai == nil:
 		data.AutoPickFailed = true
-	} else if dirs, err := h.seedctl.ListDirs(req.Context(), "tv"); err != nil {
-		slog.Warn("list_dirs_failed", "err", err)
-		data.AutoPickFailed = true
-	} else if res, err := h.ai.PickDir(req.Context(), it.Title, dirs.Dirs); err != nil {
-		slog.Warn("aiclassify_pickdir_failed", "title", it.Title, "err", err)
-		data.AutoPickFailed = true
-	} else if h.roots.TV != "" && res.ShowDir != "" && res.Season > 0 {
-		// Claude's response may technically be an absolute path; stripPrefix
-		// normalises whatever we end up with to a relative form.
-		abs := filepath.Join(h.roots.TV, res.ShowDir, fmt.Sprintf("season%d", res.Season))
+	default:
+		entry, err := h.ensureTorrentCached(req.Context(), it)
+		if err != nil {
+			slog.Warn("fetch_or_parse_torrent_failed", "feed", it.FeedName, "guid", it.GUID, "err", err)
+			data.AutoPickFailed = true
+			break
+		}
+		dirs, err := h.seedctl.ListDirs(req.Context(), "tv")
+		if err != nil {
+			slog.Warn("list_dirs_failed", "err", err)
+			data.AutoPickFailed = true
+			break
+		}
+		contents := aiclassify.TorrentContents{
+			Name:       entry.Meta.Name,
+			SingleFile: entry.Meta.SingleFile,
+			Files:      filePaths(entry.Meta.Files),
+		}
+		res, err := h.ai.PickDir(req.Context(), it.Title, dirs.Dirs, contents)
+		if err != nil {
+			slog.Warn("aiclassify_pickdir_failed", "title", it.Title, "err", err)
+			data.AutoPickFailed = true
+			break
+		}
+		if h.roots.TV == "" || res.ShowDir == "" {
+			data.AutoPickFailed = true
+			break
+		}
+		// res.Subdir is "" when the torrent already carries its own season
+		// folder; filepath.Join collapses empty components, so the joined
+		// path is simply <tv>/<show> in that case.
+		abs := filepath.Join(h.roots.TV, res.ShowDir, res.Subdir)
 		data.ProposedSaveDir = h.stripPrefix(abs)
 		data.ClaudePicked = true
-	} else {
-		data.AutoPickFailed = true
 	}
 
 	if err := h.r.enqueueFormRow.ExecuteTemplate(w, "_enqueue_form_row.html", data); err != nil {
 		slog.Error("render_enqueue_form_row", "err", err)
 	}
+}
+
+// ensureTorrentCached returns a cache entry for the item: a hit if the
+// classify → enqueue handoff already fetched it, otherwise it fetches,
+// parses, hashes, and stores the entry before returning it.
+func (h *handler) ensureTorrentCached(ctx context.Context, it api.ItemRecord) (*cachedTorrent, error) {
+	if e, ok := h.torrents.Get(it.FeedName, it.GUID); ok {
+		return e, nil
+	}
+	cookie := os.Getenv(h.cookieEnvFor(it.FeedName))
+	body, err := fetchTorrent(ctx, it.Link, cookie)
+	if err != nil {
+		return nil, fmt.Errorf("fetch %s: %w", it.Link, err)
+	}
+	meta, err := torrent.Parse(body)
+	if err != nil {
+		return nil, fmt.Errorf("parse torrent: %w", err)
+	}
+	hash := it.InfoHash
+	if hash == "" {
+		h2, herr := feed.ComputeHashFromTorrentBytes(body)
+		if herr != nil {
+			return nil, fmt.Errorf("compute hash: %w", herr)
+		}
+		hash = h2
+	}
+	entry := &cachedTorrent{Bytes: body, Meta: meta, InfoHash: hash}
+	h.torrents.Put(it.FeedName, it.GUID, entry)
+	return entry, nil
+}
+
+// filePaths flattens the parsed file list to the path slice claude expects.
+// The cap-to-N happens inside aiclassify.PickDir so the prompt stays bounded
+// regardless of caller behaviour.
+func filePaths(fs []torrent.FileEntry) []string {
+	out := make([]string, len(fs))
+	for i, f := range fs {
+		out[i] = f.Path
+	}
+	return out
 }
 
 // enqueueDo executes the enqueue: fetch the .torrent, compute the hash if
@@ -514,32 +588,27 @@ func (h *handler) enqueueDo(w http.ResponseWriter, req *http.Request) {
 	// to the absolute path seedctl/rtorrent expects.
 	saveDir := h.expandPrefix(req.PostForm.Get("save_dir"))
 
-	// fetchTorrent uses http.DefaultClient because tracker URLs are served
-	// off public CA, NOT mTLS. The cookie comes from the per-feed env var
-	// declared in the watchlist (e.g. COOKIE_TRACKER_A for TrackerA feeds); task 15
-	// mounts the same tmgr-cookies secret into tmweb's deployment so this
-	// works in production.
-	cookie := os.Getenv(h.cookieEnvFor(it.FeedName))
-	body, err := fetchTorrent(req.Context(), it.Link, cookie)
+	// reuse the .torrent bytes + info hash from the classify step when
+	// available; only hit the tracker when there's no cache entry (e.g.
+	// rule-matched modal, or classify TTL expired). fetchTorrent uses
+	// http.DefaultClient because tracker URLs are served off public CA,
+	// NOT mTLS. The cookie comes from the per-feed env var declared in
+	// the watchlist (e.g. COOKIE_TRACKER_A for TrackerA feeds); task 15 mounts the
+	// same tmgr-cookies secret into tmweb's deployment.
+	entry, err := h.ensureTorrentCached(req.Context(), it)
 	if err != nil {
-		h.renderEnqueueError(w, fmt.Sprintf("fetch %s: %s", it.Link, err))
+		h.renderEnqueueError(w, err.Error())
 		return
 	}
-	hash := it.InfoHash
-	if hash == "" {
-		h2, herr := feed.ComputeHashFromTorrentBytes(body)
-		if herr != nil {
-			h.renderEnqueueError(w, fmt.Sprintf("compute hash: %s", herr))
-			return
-		}
-		hash = h2
-	}
-	if _, err := h.seedctl.PostTorrent(req.Context(), hash, body, saveDir); err != nil {
+	if _, err := h.seedctl.PostTorrent(req.Context(), entry.InfoHash, entry.Bytes, saveDir); err != nil {
 		h.renderEnqueueError(w, fmt.Sprintf("seedctl add: %s", err))
 		return
 	}
+	// torrent is now committed to seedctl; the cached bytes have served
+	// their purpose and we can drop them eagerly rather than wait for ttl.
+	h.torrents.Delete(it.FeedName, it.GUID)
 	slog.Info("manual_enqueue_done",
-		"feed", it.FeedName, "guid", it.GUID, "hash", hash,
+		"feed", it.FeedName, "guid", it.GUID, "hash", entry.InfoHash,
 		"save_dir", saveDir, "had_rule", it.MatchedRule != "")
 
 	// re-render the table preserving whatever filter state the user had open.

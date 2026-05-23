@@ -81,6 +81,10 @@ func TestParse_SingleFile(t *testing.T) {
 	assert.Equal(t, 1, md.FileCount)
 	assert.Equal(t, int64(524_288_000), md.TotalBytes)
 	assert.Equal(t, []string{"Bobs.Burgers.S16E14.1080p.WEB.h264-EDITH.mkv"}, md.Roots)
+	assert.True(t, md.SingleFile, "single-file torrent")
+	assert.Equal(t, []torrent.FileEntry{
+		{Path: "Bobs.Burgers.S16E14.1080p.WEB.h264-EDITH.mkv", Length: 524_288_000},
+	}, md.Files)
 }
 
 func TestParse_MultiFile(t *testing.T) {
@@ -99,6 +103,12 @@ func TestParse_MultiFile(t *testing.T) {
 	assert.Equal(t, int64(8_589_934_592+200_000+500_000_000), md.TotalBytes)
 	assert.Equal(t, []string{"MovieName.2024.1080p.BluRay.x264-GROUP"}, md.Roots,
 		"per BEP3 a multi-file torrent has exactly one root: info.name")
+	assert.False(t, md.SingleFile, "multi-file torrent")
+	assert.Equal(t, []torrent.FileEntry{
+		{Path: "movie.mkv", Length: 8_589_934_592},
+		{Path: "movie.nfo", Length: 200_000},
+		{Path: "extras/behind_the_scenes.mkv", Length: 500_000_000},
+	}, md.Files, "Path is joined by '/' and relative to info.name")
 }
 
 func TestParse_Malformed(t *testing.T) {

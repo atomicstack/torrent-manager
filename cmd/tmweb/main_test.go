@@ -592,15 +592,36 @@ func TestEnqueueConfirm_NoRule_TV_RendersClaudeIcon(t *testing.T) {
 }
 
 // TestEnqueueClassify_RendersForm covers the slow path returned to htmx after
-// the loading placeholder fires. It exercises the seedctl /v1/dirs round-trip
-// + the aiclassify call (against a stubbed anthropic server) and asserts the
-// proposed save_dir lands in the rendered form.
+// the loading placeholder fires. It exercises the .torrent fetch + parse,
+// the seedctl /v1/dirs round-trip, and the aiclassify call (against a
+// stubbed anthropic server), and asserts the proposed save_dir lands in
+// the rendered form.
 func TestEnqueueClassify_RendersForm(t *testing.T) {
+	// minimal valid single-file .torrent so torrent.Parse + ComputeHash succeed.
+	info := metainfo.Info{
+		PieceLength: 16384,
+		Pieces:      make([]byte, 20),
+		Name:        "Severance.S02E01.1080p.mkv",
+		Length:      1,
+	}
+	infoBytes, err := bencode.Marshal(info)
+	require.NoError(t, err)
+	mi := metainfo.MetaInfo{InfoBytes: infoBytes}
+	torrentBytes, err := bencode.Marshal(mi)
+	require.NoError(t, err)
+
+	tracker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(torrentBytes)
+	}))
+	t.Cleanup(tracker.Close)
+
 	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/items":
 			_ = json.NewEncoder(w).Encode(api.ItemsListResponse{Items: []api.ItemRecord{
-				{FeedName: "TrackerB (TV)", GUID: "g1", Title: "Severance.S02E01.1080p"},
+				{FeedName: "TrackerB (TV)", GUID: "g1",
+					Title: "Severance.S02E01.1080p",
+					Link:  tracker.URL + "/.torrent"},
 			}})
 		case "/v1/dirs":
 			_ = json.NewEncoder(w).Encode(api.DirsListResponse{Dirs: []string{"beef", "severance"}})
@@ -617,7 +638,7 @@ func TestEnqueueClassify_RendersForm(t *testing.T) {
 			"type": "message",
 			"role": "assistant",
 			"model": "claude-opus-4-7",
-			"content": [{"type": "text", "text": "{\"show_dir\": \"severance\", \"season\": 2, \"is_new_dir\": false}"}],
+			"content": [{"type": "text", "text": "{\"show_dir\": \"severance\", \"subdir\": \"season2\", \"is_new_dir\": false}"}],
 			"stop_reason": "end_turn",
 			"usage": {"input_tokens": 50, "output_tokens": 15}
 		}`)

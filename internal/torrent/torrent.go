@@ -6,16 +6,29 @@ package torrent
 import (
 	"bytes"
 	"fmt"
+	"strings"
 
 	"github.com/anacrolix/torrent/metainfo"
 )
 
+// FileEntry is a single file inside the torrent.
+//
+// For multi-file torrents Path is relative to info.name (the wrapper dir),
+// joined with "/". For single-file torrents Path equals info.name (since
+// there is no wrapper dir — the file itself is the top-level entry).
+type FileEntry struct {
+	Path   string
+	Length int64
+}
+
 // Metadata is the inspection result.
 type Metadata struct {
-	Name       string   // info.name — top-level filename (single-file) or root dir (multi-file)
-	TotalBytes int64    // sum of all file lengths
-	FileCount  int      // 1 for single-file torrents, len(info.files) otherwise
-	Roots      []string // disk entries the torrent will create. Always [Name] per BEP3.
+	Name       string      // info.name — top-level filename (single-file) or root dir (multi-file)
+	TotalBytes int64       // sum of all file lengths
+	FileCount  int         // 1 for single-file torrents, len(info.files) otherwise
+	Roots      []string    // disk entries the torrent will create. Always [Name] per BEP3.
+	SingleFile bool        // true when the torrent contains a single file (no wrapper dir)
+	Files      []FileEntry // every file in the torrent, relative paths joined with "/"
 }
 
 // Parse decodes a .torrent payload and returns a Metadata summary. The
@@ -37,10 +50,17 @@ func Parse(b []byte) (Metadata, error) {
 	if len(info.Files) == 0 {
 		m.FileCount = 1
 		m.TotalBytes = info.Length
+		m.SingleFile = true
+		m.Files = []FileEntry{{Path: info.Name, Length: info.Length}}
 	} else {
 		m.FileCount = len(info.Files)
+		m.Files = make([]FileEntry, 0, len(info.Files))
 		for _, f := range info.Files {
 			m.TotalBytes += f.Length
+			m.Files = append(m.Files, FileEntry{
+				Path:   strings.Join(f.Path, "/"),
+				Length: f.Length,
+			})
 		}
 	}
 	return m, nil
