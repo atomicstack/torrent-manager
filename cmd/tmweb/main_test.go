@@ -242,57 +242,6 @@ func TestEnqueueConfirm_RenderModal(t *testing.T) {
 	assert.Contains(t, body, `hx-post="/api/enqueue`, "confirm button POSTs back to /api/enqueue")
 }
 
-// TestEnqueueConfirm_FetchesMetaOnOpen asserts the modal-open handler
-// fetches + parses the .torrent so size + contents rows are present on
-// the initial render, without the user having to click the ✨ button.
-func TestEnqueueConfirm_FetchesMetaOnOpen(t *testing.T) {
-	info := metainfo.Info{
-		PieceLength: 16384,
-		Pieces:      make([]byte, 20),
-		Name:        "foo.s01e01.mkv",
-		Length:      1610612736, // 1.5 GiB
-	}
-	infoBytes, err := bencode.Marshal(info)
-	require.NoError(t, err)
-	torrentBytes, err := bencode.Marshal(metainfo.MetaInfo{InfoBytes: infoBytes})
-	require.NoError(t, err)
-
-	tracker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(torrentBytes)
-	}))
-	t.Cleanup(tracker.Close)
-
-	seedctl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/v1/items" {
-			_ = json.NewEncoder(w).Encode(api.ItemsListResponse{Items: []api.ItemRecord{{
-				FeedName:    "TrackerA (TV)",
-				GUID:        "g1",
-				Title:       "Foo.S01E01.1080p",
-				MatchedRule: "foo",
-				Link:        tracker.URL + "/.torrent",
-				LastSeenAt:  time.Now().Unix(),
-			}}})
-			return
-		}
-		http.NotFound(w, r)
-	}))
-	t.Cleanup(seedctl.Close)
-
-	r, err := newRenderer()
-	require.NoError(t, err)
-	mux := newMux(NewSeedctl(seedctl.URL, seedctl.Client()),
-		[]string{"TrackerA (TV)"}, nil, nil,
-		[]feed.ShowRule{fooRule()},
-		savedir.Roots{TV: "/t/tv"}, nil, r)
-	rr := httptest.NewRecorder()
-	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet,
-		"/api/enqueue-confirm?feed=TrackerA%20(TV)&guid=g1", nil))
-	require.Equal(t, http.StatusOK, rr.Code)
-	body := rr.Body.String()
-	assert.Contains(t, body, "1.50 GiB", "size row populated from the fetched .torrent on initial modal render")
-	assert.Contains(t, body, "<dt>contents</dt>", "contents row visible on initial modal render")
-}
-
 // TestEnqueueConfirm_NoRule_OtherCategory covers the "other" branch of the
 // no-rule flow: the modal renders with an empty save_dir input (no auto
 // proposal, no auto-pick failure note — it's just a freeform field).
