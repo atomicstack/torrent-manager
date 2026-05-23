@@ -88,10 +88,20 @@ th, td {
 
 .cell-title a:hover { text-decoration: underline; }
 
-.cell-seen {
+/* feed name + relative timestamp share one line in every row card. */
+.cell-meta {
+  display: flex;
+  gap: 0.4rem;
+  align-items: baseline;
+  font-size: 0.75rem;
+  text-transform: uppercase;
   color: var(--muted);
   white-space: nowrap;
 }
+
+.cell-meta-sep { opacity: 0.5; }
+
+.cell-seen { white-space: nowrap; }
 
 .badge {
   font-size: 0.75rem;
@@ -212,9 +222,4 @@ th, td {
     border-radius: 4px;
   }
   td { border: none; padding: 0.2rem 0; }
-  .cell-feed {
-    font-size: 0.75rem;
-    color: var(--muted);
-    text-transform: uppercase;
-  }
 }

@@ -208,7 +208,7 @@ func (h *handler) search(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		// escape the error message to avoid breaking the surrounding <tr>
 		// if seedctl returned a URL containing < or & in the error string.
-		fmt.Fprintf(w, `<tr><td colspan="5" class="empty">error: %s</td></tr>`, html.EscapeString(err.Error()))
+		fmt.Fprintf(w, `<tr><td colspan="4" class="empty">error: %s</td></tr>`, html.EscapeString(err.Error()))
 		return
 	}
 	if err := h.r.rows.Execute(w, items); err != nil {
@@ -355,7 +355,7 @@ func (h *handler) cookieEnvFor(feedName string) string {
 // default) — the user sees the error inline in the table.
 func (h *handler) renderEnqueueError(w http.ResponseWriter, msg string) {
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `<tr><td colspan="5" class="empty">enqueue failed: %s</td></tr>`,
+	fmt.Fprintf(w, `<tr><td colspan="4" class="empty">enqueue failed: %s</td></tr>`,
 		html.EscapeString(msg))
 }
 

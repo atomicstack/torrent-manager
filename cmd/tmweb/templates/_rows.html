@@ -1,11 +1,14 @@
 {{if not .Items}}
-<tr><td colspan="5" class="empty">no matches</td></tr>
+<tr><td colspan="4" class="empty">no matches</td></tr>
 {{end}}
 {{range .Items}}
 <tr data-feed="{{.FeedName}}" data-guid="{{.GUID}}" data-hash="{{.InfoHash}}">
-  <td class="cell-feed">{{.FeedName}}</td>
+  <td class="cell-meta">
+    <span class="cell-feed">{{.FeedName}}</span>
+    <span class="cell-meta-sep">·</span>
+    <span class="cell-seen">{{ago .LastSeenAt}}</span>
+  </td>
   <td class="cell-title"><a href="{{.Link}}" target="_blank" rel="noopener">{{.Title}}</a></td>
-  <td class="cell-seen">{{ago .LastSeenAt}}</td>
   <td class="cell-status">
     {{if .Enqueued}}
       <span class="badge badge-{{.EnqueueSource}}">{{.EnqueueSource}}-enqueued</span>
