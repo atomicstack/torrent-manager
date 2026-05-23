@@ -7,20 +7,6 @@
       <dt>feed</dt>  <dd>{{.Item.FeedName}}{{if .Category}} ({{.Category}}){{end}}</dd>
       {{if .Item.InfoHash}}<dt>info hash</dt><dd class="mono">{{.Item.InfoHash}}</dd>{{end}}
     </dl>
-    {{if .LoadingURL}}
-    <!-- async claude lookup: this div is replaced by the form when the response lands. -->
-    <div hx-get="{{.LoadingURL}}" hx-trigger="load" hx-swap="outerHTML">
-      <div class="classify-loading">
-        <div class="bar"><div class="fill"></div></div>
-        <span>asking claude…</span>
-      </div>
-      <div class="modal-actions">
-        <button type="button" class="btn-cancel"
-                hx-on:click="document.getElementById('modal').innerHTML=''">cancel</button>
-      </div>
-    </div>
-    {{else}}
     {{template "_enqueue_form.html" .}}
-    {{end}}
   </div>
 </div>

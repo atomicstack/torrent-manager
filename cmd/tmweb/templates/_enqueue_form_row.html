@@ -1,0 +1,19 @@
+{{define "_enqueue_form_row.html"}}
+<div class="form-row-block">
+  {{- if .ClaudePicked}}<p class="modal-note">claude suggested the path below — review or edit before confirming.</p>{{end -}}
+  {{- if .AutoPickFailed}}<p class="modal-note">auto-classify failed — fill in the destination manually.</p>{{end -}}
+  <label class="form-row">
+    <span>save dir{{if .CommonRoot}} <span class="form-prefix" title="{{.CommonRoot}}">(under {{.CommonRoot}})</span>{{end}}</span>
+    <span class="path-input-wrap">
+      <input type="text" name="save_dir" value="{{.ProposedSaveDir}}"
+             list="path-completions" autocomplete="off" spellcheck="false"
+             placeholder="e.g. tv/severance/season2 (empty = rtorrent default)">
+      {{- if and (eq .Category "tv") .ClaudeAvailable -}}
+      <button type="button" class="btn-classify" title="ask claude to suggest a path"
+              hx-get="/api/enqueue-classify?feed={{.Item.FeedName | urlquery}}&guid={{.Item.GUID | urlquery}}"
+              hx-target="closest .form-row-block" hx-swap="outerHTML">✨</button>
+      {{- end -}}
+    </span>
+  </label>
+</div>
+{{end}}

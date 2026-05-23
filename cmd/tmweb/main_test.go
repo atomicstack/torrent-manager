@@ -236,7 +236,9 @@ func TestEnqueueConfirm_RenderModal(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr.Code)
 	body := rr.Body.String()
 	assert.Contains(t, body, "Foo.S01E01.1080p", "modal shows the item title")
-	assert.Contains(t, body, "/t/tv/foo/season1", "save_dir derived correctly")
+	// modal shows the relative path (under the common /t/ root). server expands
+	// it back to /t/tv/foo/season1 on submit.
+	assert.Contains(t, body, `value="tv/foo/season1"`, "save_dir relative path in input")
 	assert.Contains(t, body, `hx-post="/api/enqueue`, "confirm button POSTs back to /api/enqueue")
 }
 
@@ -277,11 +279,10 @@ func TestEnqueueConfirm_NoRule_TV_ClaudeProposes(t *testing.T) {
 	t.Skip("covered by AutoPickFailed test; live ai not exercised in unit tests")
 }
 
-// TestEnqueueConfirm_NoRule_TV_AutoPickFailed_RendersEditable covers the
+// TestEnqueueConfirm_NoRule_TV_NoAI_RendersWithoutClaudeIcon covers the
 // tv branch when ai is nil (ANTHROPIC_API_KEY unset). The modal renders
-// with auto-classify-failed messaging and an empty editable save_dir
-// input so the user can fill it in.
-func TestEnqueueConfirm_NoRule_TV_AutoPickFailed_RendersEditable(t *testing.T) {
+// with an empty editable save_dir input, NO claude icon, and no proposal.
+func TestEnqueueConfirm_NoRule_TV_NoAI_RendersWithoutClaudeIcon(t *testing.T) {
 	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/items" {
 			_ = json.NewEncoder(w).Encode(api.ItemsListResponse{Items: []api.ItemRecord{
@@ -303,7 +304,7 @@ func TestEnqueueConfirm_NoRule_TV_AutoPickFailed_RendersEditable(t *testing.T) {
 		[]string{"TrackerB (TV)"}, nil,
 		map[string]string{"TrackerB (TV)": "tv"},
 		nil, savedir.Roots{TV: "/t/tv"},
-		nil, // ai nil → auto-pick failed
+		nil, // ai nil → no claude icon
 		r)
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet,
@@ -311,9 +312,9 @@ func TestEnqueueConfirm_NoRule_TV_AutoPickFailed_RendersEditable(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr.Code)
 	body := rr.Body.String()
 	assert.Contains(t, body, "no watchlist rule matched")
-	assert.Contains(t, body, "auto-classify failed")
 	assert.Contains(t, body, `name="save_dir"`, "must include editable save_dir input")
-	assert.Contains(t, body, `value=""`, "no proposed dir when auto-pick failed")
+	assert.Contains(t, body, `value=""`, "no proposed dir when ai is unavailable")
+	assert.NotContains(t, body, "btn-classify", "no claude icon when ai is nil")
 }
 
 // TestEnqueueConfirm_NoRule_Movies covers the movies branch: the modal
@@ -342,7 +343,9 @@ func TestEnqueueConfirm_NoRule_Movies(t *testing.T) {
 		"/api/enqueue-confirm?feed=TrackerB+%28Movies%29&guid=m1", nil))
 	require.Equal(t, http.StatusOK, rr.Code)
 	body := rr.Body.String()
-	assert.Contains(t, body, `value="/t/movies"`, "movies path pre-fills the root")
+	// "movies" is the relative form under the common root "/t/". Server expands
+	// it back to /t/movies on submit.
+	assert.Contains(t, body, `value="movies"`, "movies path pre-fills the relative root")
 }
 
 // TestEnqueueDo_NoRule_AcceptsFormSaveDir confirms the POST handler reads
@@ -544,12 +547,11 @@ func TestEnqueueDo_TrackerFailureRendersErrorRow(t *testing.T) {
 	assert.Contains(t, body, "status 403")
 }
 
-// TestEnqueueConfirm_NoRule_TV_RendersLoadingShell verifies the new fast-path
-// behaviour from the modal-loading UX change: when ai is configured, the tv
-// no-rule branch returns the modal shell *immediately* with a loading
-// placeholder + an hx-get pointing at /api/enqueue-classify. The classify
-// endpoint is what eventually does the slow claude call.
-func TestEnqueueConfirm_NoRule_TV_RendersLoadingShell(t *testing.T) {
+// TestEnqueueConfirm_NoRule_TV_RendersClaudeIcon verifies the modal opens
+// instantly with the form already inline + an editable empty save_dir + a
+// ✨ claude button that triggers /api/enqueue-classify on click. The classify
+// endpoint is no longer fired automatically.
+func TestEnqueueConfirm_NoRule_TV_RendersClaudeIcon(t *testing.T) {
 	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/items" {
 			_ = json.NewEncoder(w).Encode(api.ItemsListResponse{Items: []api.ItemRecord{
@@ -563,8 +565,8 @@ func TestEnqueueConfirm_NoRule_TV_RendersLoadingShell(t *testing.T) {
 
 	r, err := newRenderer()
 	require.NoError(t, err)
-	// non-nil ai client — points at an unused stub since enqueue-confirm
-	// shouldn't actually invoke claude (that happens in /api/enqueue-classify).
+	// non-nil ai client — points at an unused stub. enqueue-confirm must NOT
+	// call claude; the user clicks the icon to fire enqueue-classify.
 	anthropicStub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Errorf("claude should NOT be called by enqueue-confirm; only by enqueue-classify")
 		w.WriteHeader(500)
@@ -583,11 +585,10 @@ func TestEnqueueConfirm_NoRule_TV_RendersLoadingShell(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr.Code)
 	body := rr.Body.String()
 	assert.Contains(t, body, "no watchlist rule matched", "modal opens immediately")
-	assert.Contains(t, body, "asking claude", "loading placeholder visible")
-	assert.Contains(t, body, "classify-loading", "css hook present for the progress bar")
+	assert.Contains(t, body, `name="save_dir"`, "form rendered inline (no async loading)")
+	assert.Contains(t, body, "btn-classify", "claude icon present for tv items when ai is configured")
 	assert.Regexp(t, regexp.MustCompile(`hx-get="/api/enqueue-classify\?feed=TrackerB[^"]+"`), body,
-		"hx-get fires the classify endpoint")
-	assert.NotContains(t, body, `name="save_dir"`, "form is NOT inline yet — it gets swapped in later")
+		"icon fires the classify endpoint")
 }
 
 // TestEnqueueClassify_RendersForm covers the slow path returned to htmx after
@@ -636,7 +637,10 @@ func TestEnqueueClassify_RendersForm(t *testing.T) {
 		"/api/enqueue-classify?feed=TrackerB+%28TV%29&guid=g1", nil))
 	require.Equal(t, http.StatusOK, rr.Code)
 	body := rr.Body.String()
-	assert.Contains(t, body, `value="/t/tv/severance/season2"`, "claude's proposal lands in the input")
+	// claude's proposal lands as a path relative to the common root (parent
+	// of TV + Movies = "/t/"). server expands it back to /t/tv/severance/season2
+	// on submit.
+	assert.Contains(t, body, `value="tv/severance/season2"`, "claude's proposal lands in the input")
 	assert.Contains(t, body, "claude suggested the path below", "notice rendered")
 	assert.Contains(t, body, `name="save_dir"`, "form input present")
 }

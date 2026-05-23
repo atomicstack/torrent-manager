@@ -281,6 +281,45 @@ th, td {
   border-radius: 4px;
   background: var(--bg);
   color: var(--fg);
+  width: 100%;
+}
+
+.form-prefix {
+  font-family: ui-monospace, monospace;
+  font-size: 0.75rem;
+  font-weight: normal;
+  opacity: 0.7;
+}
+
+/* the save_dir input + claude icon share a row; the input grows to fill
+   while the button stays compact on the right. */
+.path-input-wrap {
+  display: flex;
+  gap: 0.4rem;
+  align-items: stretch;
+}
+.path-input-wrap input[type=text] { flex: 1; }
+
+.btn-classify {
+  padding: 0.3rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  transition: background 0.12s ease;
+}
+.btn-classify:hover { background: var(--border); }
+/* spin the sparkle while htmx is in-flight so the user gets feedback
+   that claude has been asked. */
+.btn-classify.htmx-request {
+  animation: classify-spin 1.2s linear infinite;
+  pointer-events: none;
+}
+@keyframes classify-spin {
+  to { transform: rotate(360deg); }
 }
 
 /* in-flight enqueue progress: the form swaps to a shimmer bar + step list

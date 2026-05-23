@@ -37,11 +37,10 @@ type renderer struct {
 	rows          *template.Template
 	confirm       *template.Template
 	confirmNoRule *template.Template
-	// enqueueForm is the inner <form> fragment shared by the no-rule modal
-	// (when claude has already responded) and by GET /api/enqueue-classify
-	// (the async claude lookup returns just this fragment to outerHTML-swap
-	// the loading placeholder).
-	enqueueForm *template.Template
+	// enqueueFormRow is the small fragment GET /api/enqueue-classify returns
+	// to outerHTML-swap the .form-row-block inside the open modal when the
+	// user clicks the ✨ claude icon.
+	enqueueFormRow *template.Template
 }
 
 // newRenderer parses the embedded templates and returns a ready-to-execute
@@ -56,9 +55,11 @@ func newRenderer() (*renderer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse rows: %w", err)
 	}
-	// _confirm.html + the no-rule modal + the bare form fragment all include
-	// the _enqueue_progress.html partial (the in-flight shimmer-bar + step
-	// list), so it has to be in every parse set.
+	// Both modal templates embed _enqueue_progress.html (the in-flight
+	// shimmer + step list). The no-rule modal additionally embeds
+	// _enqueue_form.html → _enqueue_form_row.html for the save_dir +
+	// claude-icon block. The classify endpoint renders just the row partial
+	// for an outerHTML swap, so it gets its own template handle.
 	confirm, err := template.New("_confirm.html").Funcs(funcMap).
 		ParseFS(templatesFS, "templates/_confirm.html", "templates/_enqueue_progress.html")
 	if err != nil {
@@ -68,23 +69,22 @@ func newRenderer() (*renderer, error) {
 		ParseFS(templatesFS,
 			"templates/_confirm_norule.html",
 			"templates/_enqueue_form.html",
+			"templates/_enqueue_form_row.html",
 			"templates/_enqueue_progress.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse confirm_norule: %w", err)
 	}
-	enqueueForm, err := template.New("_enqueue_form.html").Funcs(funcMap).
-		ParseFS(templatesFS,
-			"templates/_enqueue_form.html",
-			"templates/_enqueue_progress.html")
+	enqueueFormRow, err := template.New("_enqueue_form_row.html").Funcs(funcMap).
+		ParseFS(templatesFS, "templates/_enqueue_form_row.html")
 	if err != nil {
-		return nil, fmt.Errorf("parse enqueue_form: %w", err)
+		return nil, fmt.Errorf("parse enqueue_form_row: %w", err)
 	}
 	return &renderer{
-		layout:        layout,
-		rows:          rows,
-		confirm:       confirm,
-		confirmNoRule: confirmNoRule,
-		enqueueForm:   enqueueForm,
+		layout:         layout,
+		rows:           rows,
+		confirm:        confirm,
+		confirmNoRule:  confirmNoRule,
+		enqueueFormRow: enqueueFormRow,
 	}, nil
 }
 

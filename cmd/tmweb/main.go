@@ -23,10 +23,10 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -141,6 +141,79 @@ func cookieEnvMap(f *watchlist.File) map[string]string {
 	return out
 }
 
+// computeCommonRoot returns the parent directory shared by the configured
+// tv + movies roots, including a trailing path separator. Returns "" when
+// the two roots don't share a parent (or none are configured) — callers
+// degrade to showing absolute paths in that case.
+func computeCommonRoot(roots savedir.Roots) string {
+	var parents []string
+	if roots.TV != "" {
+		parents = append(parents, filepath.Dir(roots.TV))
+	}
+	if roots.Movies != "" {
+		parents = append(parents, filepath.Dir(roots.Movies))
+	}
+	if len(parents) == 0 {
+		return ""
+	}
+	p := parents[0]
+	for _, q := range parents[1:] {
+		if q != p {
+			return ""
+		}
+	}
+	return p + string(filepath.Separator)
+}
+
+// stripPrefix returns absPath with the handler's commonRoot prefix removed
+// when it matches. Falls through to absPath when commonRoot is empty or the
+// path doesn't sit under it (e.g. user already passing a different absolute
+// path through the modal).
+func (h *handler) stripPrefix(absPath string) string {
+	if h.commonRoot == "" {
+		return absPath
+	}
+	if rel, ok := strings.CutPrefix(absPath, h.commonRoot); ok {
+		return rel
+	}
+	return absPath
+}
+
+// expandPrefix turns a relative save_dir (as typed in the modal) back into
+// an absolute path. Absolute inputs and empty values pass through unchanged
+// so a user can still type a fully-qualified path or leave the field blank.
+func (h *handler) expandPrefix(rel string) string {
+	if rel == "" {
+		return ""
+	}
+	if filepath.IsAbs(rel) {
+		return rel
+	}
+	if h.commonRoot == "" {
+		return rel
+	}
+	return h.commonRoot + rel
+}
+
+// collectCompletions fetches the existing show / movie dir basenames from
+// seedctl and returns them as relative path entries (e.g. "tv/severance",
+// "movies/Blade Runner 2049"). Used to populate the modal's autocomplete
+// datalist. Failures are silent — autocomplete is optional UX.
+func (h *handler) collectCompletions(ctx context.Context) []string {
+	roots := []string{"tv", "movies"}
+	var out []string
+	for _, r := range roots {
+		resp, err := h.seedctl.ListDirs(ctx, r)
+		if err != nil {
+			continue
+		}
+		for _, d := range resp.Dirs {
+			out = append(out, r+"/"+d)
+		}
+	}
+	return out
+}
+
 // feedCategoryMap builds a feed-name -> category lookup ("tv" | "movies" |
 // "other"). Used by the no-rule enqueue flow to decide how to propose a
 // save_dir. Feeds with no category declared are omitted (the handler treats
@@ -167,7 +240,13 @@ type handler struct {
 	cookieEnvs     map[string]string  // feedName -> CookieEnv (e.g. "TrackerA (TV)" -> "COOKIE_TRACKER_A")
 	feedCategories map[string]string  // feedName -> "tv"|"movies"|"other" (no-rule flow)
 	ai             *aiclassify.Client // nil if ANTHROPIC_API_KEY unset; no-rule tv path falls back to manual entry
-	r              *renderer
+	// commonRoot is the parent directory shared by roots.TV and roots.Movies
+	// (with trailing separator). When non-empty we strip it from save_dirs
+	// before rendering the modal — the user only sees + types the part under
+	// the common root — and expand it back to absolute on POST. Empty when
+	// the two roots don't share a parent (degrades to absolute paths).
+	commonRoot string
+	r          *renderer
 }
 
 // newMux wires the http routes for tmweb. Extracted from main so tests can
@@ -190,6 +269,7 @@ func newMux(
 		cookieEnvs:     cookieEnvs,
 		feedCategories: feedCategories,
 		ai:             ai,
+		commonRoot:     computeCommonRoot(roots),
 		r:              r,
 	}
 
@@ -284,7 +364,7 @@ func (h *handler) enqueueConfirm(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if it.MatchedRule != "" {
-		h.confirmRuleMatched(w, it)
+		h.confirmRuleMatched(w, req.Context(), it)
 		return
 	}
 	h.confirmNoRule(w, req.Context(), it)
@@ -292,7 +372,9 @@ func (h *handler) enqueueConfirm(w http.ResponseWriter, req *http.Request) {
 
 // confirmRuleMatched is the original rule-matched path: re-derive the
 // save_dir from the watchlist rule and render the _confirm.html modal.
-func (h *handler) confirmRuleMatched(w http.ResponseWriter, it api.ItemRecord) {
+// The save_dir is rendered relative to the common root so the user sees
+// "tv/severance/season2" instead of the full "/home/seedbox/t/tv/...".
+func (h *handler) confirmRuleMatched(w http.ResponseWriter, ctx context.Context, it api.ItemRecord) {
 	rule := h.findRule(it.MatchedRule)
 	if rule == nil {
 		renderModalError(w, "rule missing",
@@ -301,103 +383,108 @@ func (h *handler) confirmRuleMatched(w http.ResponseWriter, it api.ItemRecord) {
 	}
 	saveDir, _ := savedir.Derive(h.roots, *rule, it.Title)
 	if err := h.r.confirm.Execute(w, struct {
-		Item    api.ItemRecord
-		SaveDir string
-	}{Item: it, SaveDir: saveDir}); err != nil {
+		Item        api.ItemRecord
+		SaveDir     string
+		CommonRoot  string
+		Completions []string
+	}{
+		Item:        it,
+		SaveDir:     h.stripPrefix(saveDir),
+		CommonRoot:  h.commonRoot,
+		Completions: h.collectCompletions(ctx),
+	}); err != nil {
 		slog.Error("render_confirm", "err", err)
 	}
 }
 
-// confirmNoRule renders the _confirm_norule.html modal with a category-
-// specific proposed save_dir. Any failure to compute the proposal (ai
-// disabled, seedctl down, claude error, missing roots) renders the same
-// modal with an empty field + AutoPickFailed=true so the user always has
-// somewhere to type the path.
-// confirmNoRuleData is the data the no-rule modal template receives. The
-// LoadingURL field is non-empty only for the tv path where we want the modal
-// to open instantly and let htmx fire the slow claude lookup in the background.
-// For movies / other / ai-disabled paths the form is rendered inline and
-// LoadingURL stays empty.
+// confirmNoRuleData is the data the no-rule modal template receives.
+//
+// ClaudeAvailable controls whether the modal renders the small ✨ icon next
+// to the save_dir input — only the tv path with a working ai client gets it.
+// Clicking the icon fires /api/enqueue-classify, which returns just the
+// _enqueue_form_row.html partial with the populated proposal.
 type confirmNoRuleData struct {
 	Item            api.ItemRecord
 	Category        string
 	ProposedSaveDir string
 	ClaudePicked    bool
 	AutoPickFailed  bool
-	LoadingURL      string
+	ClaudeAvailable bool
+	CommonRoot      string
+	Completions     []string
 }
 
+// confirmNoRule renders the _confirm_norule.html modal with a category-
+// specific proposed save_dir. movies pre-fills the movies root; tv leaves
+// the field empty + offers a claude icon to ask for a suggestion on demand.
+// other categories get an empty input with no proposals.
 func (h *handler) confirmNoRule(w http.ResponseWriter, ctx context.Context, it api.ItemRecord) {
 	category := h.feedCategories[it.FeedName]
-	data := confirmNoRuleData{Item: it, Category: category}
+	data := confirmNoRuleData{
+		Item:        it,
+		Category:    category,
+		CommonRoot:  h.commonRoot,
+		Completions: h.collectCompletions(ctx),
+	}
 
 	switch category {
 	case "movies":
-		// movies just live under roots.Movies — no subdir convention. Render
-		// the form inline; no claude call needed.
-		data.ProposedSaveDir = h.roots.Movies
+		// movies just live under roots.Movies — no subdir convention.
+		data.ProposedSaveDir = h.stripPrefix(h.roots.Movies)
 	case "tv":
-		if h.ai == nil {
-			// ANTHROPIC_API_KEY missing: skip the claude call and let the
-			// user enter the dir manually. Render the form inline.
-			data.AutoPickFailed = true
-			break
-		}
-		// Tv path: return the modal shell with a loading state immediately.
-		// htmx fires GET /api/enqueue-classify on load; that endpoint does
-		// the slow seedctl + claude calls and returns the form fragment
-		// to outerHTML-swap the loading placeholder.
-		data.LoadingURL = fmt.Sprintf("/api/enqueue-classify?feed=%s&guid=%s",
-			url.QueryEscape(it.FeedName), url.QueryEscape(it.GUID))
+		// Leave the field empty; the user clicks the claude icon to populate
+		// it (or types something themselves). ClaudeAvailable controls the
+		// icon's presence.
+		data.ClaudeAvailable = h.ai != nil
 	default:
-		// "other" / unknown: render the form inline with an empty path.
+		// "other" / unknown: empty field, no icon.
 	}
 	if err := h.r.confirmNoRule.Execute(w, data); err != nil {
 		slog.Error("render_confirm_norule", "err", err)
 	}
 }
 
-// enqueueClassify performs the slow path of the no-rule tv flow: ask seedctl
-// for the existing show dirs, ask claude to pick the best fit + extract the
-// season, and return just the inner <form> fragment that outerHTML-swaps the
-// loading placeholder inside the open modal. Always 200: a swap that includes
-// "auto-classify failed" is still useful to the user.
+// enqueueClassify is triggered when the user clicks the ✨ icon next to the
+// save_dir input. It asks seedctl for the existing tv dirs, asks claude to
+// pick the best fit + extract the season, and returns the _enqueue_form_row
+// partial (notes + label + input + icon) for an outerHTML swap. Always 200
+// — a row that includes "auto-classify failed" is still useful.
 func (h *handler) enqueueClassify(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	q := req.URL.Query()
 	it, err := h.lookupItem(req.Context(), q.Get("feed"), q.Get("guid"))
 	if err != nil {
-		// Best-effort fragment so the modal shows the error inline. Skip the
-		// form entirely (user has no actionable item id without a successful
-		// lookup); render a small note + cancel button.
-		fmt.Fprintf(w, `<p class="modal-note">lookup failed: %s</p>
-<div class="modal-actions">
-  <button type="button" class="btn-cancel"
-          hx-on:click="document.getElementById('modal').innerHTML=''">close</button>
-</div>`, html.EscapeString(err.Error()))
+		fmt.Fprintf(w, `<div class="form-row-block"><p class="modal-note">lookup failed: %s</p></div>`,
+			html.EscapeString(err.Error()))
 		return
 	}
 
-	data := confirmNoRuleData{Item: it, Category: h.feedCategories[it.FeedName]}
-	dirs, err := h.seedctl.ListDirs(req.Context(), "tv")
-	if err != nil {
+	data := confirmNoRuleData{
+		Item:            it,
+		Category:        h.feedCategories[it.FeedName],
+		ClaudeAvailable: h.ai != nil,
+		CommonRoot:      h.commonRoot,
+	}
+	if h.ai == nil {
+		data.AutoPickFailed = true
+	} else if dirs, err := h.seedctl.ListDirs(req.Context(), "tv"); err != nil {
 		slog.Warn("list_dirs_failed", "err", err)
 		data.AutoPickFailed = true
+	} else if res, err := h.ai.PickDir(req.Context(), it.Title, dirs.Dirs); err != nil {
+		slog.Warn("aiclassify_pickdir_failed", "title", it.Title, "err", err)
+		data.AutoPickFailed = true
+	} else if h.roots.TV != "" && res.ShowDir != "" && res.Season > 0 {
+		// Claude's response may technically be an absolute path; stripPrefix
+		// normalises whatever we end up with to a relative form.
+		abs := filepath.Join(h.roots.TV, res.ShowDir, fmt.Sprintf("season%d", res.Season))
+		data.ProposedSaveDir = h.stripPrefix(abs)
+		data.ClaudePicked = true
 	} else {
-		res, err := h.ai.PickDir(req.Context(), it.Title, dirs.Dirs)
-		if err != nil {
-			slog.Warn("aiclassify_pickdir_failed", "title", it.Title, "err", err)
-			data.AutoPickFailed = true
-		} else if h.roots.TV != "" && res.ShowDir != "" && res.Season > 0 {
-			data.ProposedSaveDir = filepath.Join(h.roots.TV, res.ShowDir, fmt.Sprintf("season%d", res.Season))
-			data.ClaudePicked = true
-		} else {
-			data.AutoPickFailed = true
-		}
+		data.AutoPickFailed = true
 	}
 
-	if err := h.r.enqueueForm.ExecuteTemplate(w, "_enqueue_form.html", data); err != nil {
-		slog.Error("render_enqueue_form", "err", err)
+	if err := h.r.enqueueFormRow.ExecuteTemplate(w, "_enqueue_form_row.html", data); err != nil {
+		slog.Error("render_enqueue_form_row", "err", err)
 	}
 }
 
@@ -423,7 +510,9 @@ func (h *handler) enqueueDo(w http.ResponseWriter, req *http.Request) {
 		h.renderEnqueueError(w, fmt.Sprintf("parse form: %s", err))
 		return
 	}
-	saveDir := req.PostForm.Get("save_dir")
+	// modal posts a relative path (e.g. "tv/severance/season2"); expand back
+	// to the absolute path seedctl/rtorrent expects.
+	saveDir := h.expandPrefix(req.PostForm.Get("save_dir"))
 
 	// fetchTorrent uses http.DefaultClient because tracker URLs are served
 	// off public CA, NOT mTLS. The cookie comes from the per-feed env var
