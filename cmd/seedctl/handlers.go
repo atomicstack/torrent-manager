@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
+	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -31,11 +34,15 @@ type handler struct {
 	// graceful srv.Shutdown(), then syscall.Execs the on-disk binary so the
 	// new build takes over inside the same tmux pane.
 	restartCh chan<- struct{}
+	// roots maps a category name (e.g. "tv", "movies") to the absolute path
+	// whose immediate subdirectories are listable via GET /v1/dirs. Nil or
+	// empty map disables the endpoint — all roots respond 404.
+	roots map[string]string
 }
 
-func newHandler(c rtorrentClient, items *itemsdb.DB, restartCh chan<- struct{}) http.Handler {
+func newHandler(c rtorrentClient, items *itemsdb.DB, restartCh chan<- struct{}, roots map[string]string) http.Handler {
 	mux := http.NewServeMux()
-	h := &handler{c: c, items: items, restartCh: restartCh}
+	h := &handler{c: c, items: items, restartCh: restartCh, roots: roots}
 	mux.HandleFunc("GET /healthz", h.healthz)
 	mux.HandleFunc("GET /v1/torrents", h.listTorrents)
 	mux.HandleFunc("GET /v1/torrents/{hash}", h.getTorrent)
@@ -43,6 +50,7 @@ func newHandler(c rtorrentClient, items *itemsdb.DB, restartCh chan<- struct{}) 
 	mux.HandleFunc("POST /v1/items", h.upsertItems)
 	mux.HandleFunc("GET /v1/items", h.listItems)
 	mux.HandleFunc("GET /v1/items/export", h.exportItems)
+	mux.HandleFunc("GET /v1/dirs", h.listDirs)
 	mux.HandleFunc("POST /v1/admin/restart", h.adminRestart)
 	return mux
 }
@@ -177,6 +185,47 @@ func (h *handler) exportItems(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, api.ItemsListResponse{Items: itemRowsToRecords(rows)})
+}
+
+// listDirs returns the names of immediate subdirectories under the configured
+// root (skipping files and hidden entries). Used by tmweb's no-rule enqueue
+// flow to feed Claude the list of show dirs already present on the seedbox.
+//
+//   - unknown / unconfigured root -> 404 (lets seedctl deploy without roots
+//     configured and have tmweb degrade gracefully).
+//   - configured root whose path doesn't exist on disk -> 200 with an empty
+//     list, treating it as a fresh root the caller can drop into.
+//   - we never echo the absolute path back; only the basename of each subdir.
+func (h *handler) listDirs(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("root")
+	path, ok := h.roots[name]
+	if !ok || path == "" {
+		http.Error(w, "unknown root", http.StatusNotFound)
+		return
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			writeJSON(w, http.StatusOK, api.DirsListResponse{Dirs: []string{}})
+			return
+		}
+		slog.Error("list dirs", "root", name, "path", path, "err", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	dirs := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		n := e.Name()
+		if strings.HasPrefix(n, ".") {
+			continue
+		}
+		dirs = append(dirs, n)
+	}
+	sort.Strings(dirs)
+	writeJSON(w, http.StatusOK, api.DirsListResponse{Dirs: dirs})
 }
 
 func itemRowsToRecords(in []itemsdb.Item) []api.ItemRecord {

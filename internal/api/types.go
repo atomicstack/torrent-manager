@@ -63,3 +63,10 @@ type ItemsUpsertResponse struct {
 type ItemsListResponse struct {
 	Items []ItemRecord `json:"items"`
 }
+
+// DirsListResponse is the reply for GET /v1/dirs?root=<name>. The names are
+// immediate subdirectory basenames under the configured root, hidden entries
+// (those with a leading ".") excluded, sorted ascending.
+type DirsListResponse struct {
+	Dirs []string `json:"dirs"`
+}

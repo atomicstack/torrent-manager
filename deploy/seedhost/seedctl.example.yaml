@@ -6,6 +6,13 @@ scgi:   "127.0.0.1:5059"
 # allowlist:
 #   - 192.0.2.10            # home WAN /32
 #   - 2001:db8:1::/64           # home v6 /64
+# roots: subdir listing for tmweb's no-rule enqueue (phase 3). map of category
+# -> absolute path. tmweb calls GET /v1/dirs?root=tv to fetch the list of
+# existing show subdirs so claude can pick one (or propose a new name).
+# unconfigured / unknown root -> 404; missing path on disk -> 200 with [].
+roots:
+  tv:     /home/seedbox/t/tv
+  movies: /home/seedbox/t/movies
 tls:
   ca_file:   "/home/seedbox/etc/seedctl/ca.crt"
   cert_file: "/home/seedbox/etc/seedctl/server.crt"

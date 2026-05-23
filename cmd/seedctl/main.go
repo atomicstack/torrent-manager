@@ -31,7 +31,12 @@ type config struct {
 	// after TCP accept but before TLS reads any bytes, so the noisy
 	// "first record does not look like a TLS handshake" scans go silent.
 	Allowlist []string `yaml:"allowlist,omitempty"`
-	TLS       struct {
+	// Roots maps category name -> absolute path under which immediate
+	// subdirectories are listable via GET /v1/dirs?root=<name>. tmweb's
+	// no-rule enqueue flow uses this to feed Claude a list of existing show
+	// dirs. Missing/empty map disables the endpoint (all roots return 404).
+	Roots map[string]string `yaml:"roots,omitempty"`
+	TLS   struct {
 		CAFile   string `yaml:"ca_file"`
 		CertFile string `yaml:"cert_file"`
 		KeyFile  string `yaml:"key_file"`
@@ -74,7 +79,7 @@ func main() {
 		// wire bytes (post-gzip). withGzip decompresses request bodies sent
 		// with Content-Encoding: gzip and compresses responses when the client
 		// advertises Accept-Encoding: gzip.
-		Handler:           withLogging(withGzip(newHandler(client, items, restartCh))),
+		Handler:           withLogging(withGzip(newHandler(client, items, restartCh, cfg.Roots))),
 		TLSConfig:         tlsCfg,
 		ReadHeaderTimeout: 10 * time.Second,
 	}

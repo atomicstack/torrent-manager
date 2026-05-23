@@ -26,7 +26,7 @@ func newTestItemsHandler(t *testing.T) (http.Handler, *itemsdb.DB) {
 	db, err := itemsdb.Open(filepath.Join(t.TempDir(), "items.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	return newHandler(&stubClient{}, db, nil), db
+	return newHandler(&stubClient{}, db, nil, nil), db
 }
 
 func TestUpsertItems_PersistsRows(t *testing.T) {
@@ -80,7 +80,7 @@ func TestPostTorrent_RecordsEnqueue(t *testing.T) {
 		load: func(_ []byte, gotHash, _ string) (string, error) {
 			return gotHash, nil
 		},
-	}, db, nil)
+	}, db, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/torrents", strings.NewReader("fake-bytes"))
 	req.Header.Set("Content-Type", "application/x-bittorrent")
