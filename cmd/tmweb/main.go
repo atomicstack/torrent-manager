@@ -97,7 +97,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              *listenAddr,
-		Handler:           newMux(seedctl, feeds, cookieEnvs, feedCats, shows, roots, ai, r),
+		Handler:           withLogging(newMux(seedctl, feeds, cookieEnvs, feedCats, shows, roots, ai, r)),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
