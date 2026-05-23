@@ -2,10 +2,6 @@
 <div class="form-row-block">
   {{- if .ClaudePicked}}<p class="modal-note">claude suggested the path below — review or edit before confirming.</p>{{end -}}
   {{- if .AutoPickFailed}}<p class="modal-note">auto-classify failed — fill in the destination manually.</p>{{end -}}
-  <div class="classify-loading" aria-hidden="true">
-    <div class="bar"><div class="fill"></div></div>
-    <span>asking claude…</span>
-  </div>
   <label class="form-row">
     <span>save dir{{if .CommonRoot}} <span class="form-prefix" title="{{.CommonRoot}}">(under {{.CommonRoot}})</span>{{end}}</span>
     <span class="path-input-wrap">
@@ -19,5 +15,9 @@
       {{- end -}}
     </span>
   </label>
+  <div class="classify-loading" aria-hidden="true">
+    <div class="bar"><div class="fill"></div></div>
+    <span>asking claude…</span>
+  </div>
 </div>
 {{end}}

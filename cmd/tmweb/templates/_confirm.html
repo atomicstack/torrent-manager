@@ -21,6 +21,7 @@
           </span>
         </label>
       </div>
+      {{template "_enqueue_progress.html" .}}
       {{if .Completions}}
       <datalist id="path-completions">
         {{range .Completions}}<option value="{{.}}">{{end}}
@@ -31,7 +32,6 @@
                 hx-on:click="document.getElementById('modal').innerHTML=''">cancel</button>
         <button type="submit" class="btn-enqueue btn-primary">confirm</button>
       </div>
-      {{template "_enqueue_progress.html" .}}
     </form>
   </div>
 </div>

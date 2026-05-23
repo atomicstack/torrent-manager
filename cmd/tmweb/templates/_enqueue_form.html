@@ -5,6 +5,7 @@
       hx-on::after-request="var u=(event.detail.xhr||{}).responseURL||'';if(u.indexOf('/api/enqueue?')!==-1)document.getElementById('modal').innerHTML=''">
   {{- if eq .Category "movies"}}<p class="modal-note">movies have no subdir convention — edit if you want a per-title subdir.</p>{{end -}}
   {{template "_enqueue_form_row.html" .}}
+  {{template "_enqueue_progress.html" .}}
   {{- if .Completions -}}
   <datalist id="path-completions">
     {{- range .Completions -}}<option value="{{.}}">{{- end -}}
@@ -15,6 +16,5 @@
             hx-on:click="document.getElementById('modal').innerHTML=''">cancel</button>
     <button type="submit" class="btn-enqueue btn-primary">confirm</button>
   </div>
-  {{template "_enqueue_progress.html" .}}
 </form>
 {{end}}

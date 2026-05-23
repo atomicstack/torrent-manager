@@ -314,11 +314,13 @@ th, td {
 .btn-classify:hover { background: var(--border); }
 .btn-classify.htmx-request { pointer-events: none; }
 
-/* in-flight enqueue progress: the form swaps to a shimmer bar + step list
-   when htmx adds .htmx-request. modal closes once the POST completes
+/* in-flight enqueue progress: shimmer + step list slot in directly under
+   the save_dir input row (same position as the classify shimmer) so the
+   user sees the progress in a consistent place across both flows. the
+   path-input row stays visible — the modal-actions get hidden so the
+   user can't double-submit. modal closes once the POST completes
    (hx-on::after-request empties #modal). */
 .enqueue-progress { display: none; }
-form.htmx-request .form-row,
 form.htmx-request .modal-actions { display: none; }
 form.htmx-request .enqueue-progress { display: block; }
 
