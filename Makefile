@@ -1,9 +1,10 @@
-.PHONY: help build build-tmgr build-seedctl build-tmweb test test-integration lint certs image image-local image-import push deploy deploy-seedhost clean
+.PHONY: help build build-tmgr build-seedctl build-tmweb test test-integration lint certs image image-local image-import image-local-tmweb image-import-tmweb push deploy deploy-seedhost clean
 
 SEEDCTL_HOST ?= tiny.example.com
 IMAGE ?= ghcr.io/atomicstack/tmgr
 TAG ?= dev
 LOCAL_IMAGE ?= docker.io/local/tmgr:latest
+LOCAL_IMAGE_TMWEB ?= docker.io/local/tmweb:latest
 K3S_NODES ?= node-1.local node-2.local
 
 help: ## list targets
@@ -51,6 +52,18 @@ image-import: image-local ## scp dist/tmgr-image.tar and import on each k3s node
 	  echo "==> $$h"; \
 	  scp -q dist/tmgr-image.tar matt@$$h:/tmp/tmgr-image.tar && \
 	  ssh -t matt@$$h "sudo /usr/local/bin/k3s ctr images import /tmp/tmgr-image.tar"; \
+	done
+
+image-local-tmweb: ## build tmweb arm64 image into dist/tmweb-image.tar (podman)
+	mkdir -p dist
+	podman build --platform=linux/arm64 -t $(LOCAL_IMAGE_TMWEB) -f Dockerfile.tmweb .
+	podman save --format docker-archive -o dist/tmweb-image.tar $(LOCAL_IMAGE_TMWEB)
+
+image-import-tmweb: image-local-tmweb ## scp dist/tmweb-image.tar and import on each k3s node
+	@for h in $(K3S_NODES); do \
+	  echo "==> $$h"; \
+	  scp -q dist/tmweb-image.tar matt@$$h:/tmp/tmweb-image.tar && \
+	  ssh -t matt@$$h "sudo /usr/local/bin/k3s ctr images import /tmp/tmweb-image.tar"; \
 	done
 
 deploy: ## apply k8s manifests

@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tmweb
+  namespace: torrent-manager
+  labels: { app: tmweb }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: tmweb }
+  strategy:
+    # tmweb is stateless; rolling is fine but a single replica means a brief
+    # blip is unavoidable on update. Recreate keeps things predictable.
+    type: Recreate
+  template:
+    metadata:
+      labels: { app: tmweb }
+    spec:
+      securityContext:
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+      containers:
+        - name: tmweb
+          image: docker.io/local/tmweb:latest
+          imagePullPolicy: Never
+          args:
+            - --listen=:8080
+            - --seedctl-url=https://seedbox.example.com:18443
+            - --watchlist=/etc/tmgr/watchlist.yaml
+            - --ca=/etc/tmgr/tls/ca.crt
+            - --cert=/etc/tmgr/tls/client.crt
+            - --key=/etc/tmgr/tls/client.key
+          envFrom:
+            - secretRef: { name: tmgr-cookies }
+          ports:
+            - name: http
+              containerPort: 8080
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits:   { cpu: 200m, memory: 128Mi }
+          volumeMounts:
+            - name: tls
+              mountPath: /etc/tmgr/tls
+              readOnly: true
+            - name: watchlist
+              mountPath: /etc/tmgr
+              readOnly: true
+      volumes:
+        - name: tls
+          secret:
+            secretName: tmgr-tls
+            defaultMode: 0440
+        - name: watchlist
+          configMap:
+            name: tmgr-watchlist

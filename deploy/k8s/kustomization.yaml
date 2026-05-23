@@ -6,5 +6,8 @@ resources:
   - namespace.yaml
   - configmap.yaml
   - cronjob.yaml
+  - tmweb-deployment.yaml
+  - tmweb-service.yaml
+  - tmweb-ingress.yaml
 
 # secrets are NOT included here; create them via kubectl as documented in secret.example.yaml.

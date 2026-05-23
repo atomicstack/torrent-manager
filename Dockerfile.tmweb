@@ -1,0 +1,18 @@
+# build stage — tmweb has no cgo (pure http client to seedctl), so we can
+# static-link and ship from scratch.
+FROM golang:1.26-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG TARGETARCH=arm64
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH \
+    go build -ldflags="-s -w" -o /out/tmweb ./cmd/tmweb
+
+# runtime stage — scratch + ca-certificates (for outbound .torrent fetches over
+# https) is all we need.
+FROM scratch
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=build /out/tmweb /tmweb
+USER 65532:65532
+ENTRYPOINT ["/tmweb"]
