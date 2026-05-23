@@ -646,7 +646,7 @@ func (h *handler) enqueueClassify(w http.ResponseWriter, req *http.Request) {
 		sendStep("caching")
 		entry = &cachedTorrent{Bytes: body, Meta: meta, InfoHash: hash}
 		h.torrents.Put(it.FeedName, it.GUID, entry)
-		if err := h.seedctl.SetItemMeta(req.Context(), it.FeedName, it.GUID, meta.TotalBytes, meta.FileCount, meta.DirCount()); err != nil {
+		if err := h.seedctl.SetItemMeta(req.Context(), it.FeedName, it.GUID, hash, meta.TotalBytes, meta.FileCount, meta.DirCount()); err != nil {
 			slog.Warn("set_item_meta_failed", "feed", it.FeedName, "guid", it.GUID, "err", err)
 		}
 	}
@@ -780,7 +780,7 @@ func (h *handler) ensureTorrentCached(ctx context.Context, it api.ItemRecord) (*
 	// best-effort: persist the meta on the seedctl items row so subsequent
 	// page loads ship size/contents inline (and any tmgr-side auto-enqueue
 	// for the same item later short-circuits the parse).
-	if err := h.seedctl.SetItemMeta(ctx, it.FeedName, it.GUID, meta.TotalBytes, meta.FileCount, meta.DirCount()); err != nil {
+	if err := h.seedctl.SetItemMeta(ctx, it.FeedName, it.GUID, hash, meta.TotalBytes, meta.FileCount, meta.DirCount()); err != nil {
 		slog.Warn("set_item_meta_failed", "feed", it.FeedName, "guid", it.GUID, "err", err)
 	}
 	return entry, nil

@@ -267,7 +267,7 @@ func (h *handler) setItemMeta(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "feed_name and guid required", http.StatusBadRequest)
 		return
 	}
-	if err := h.items.SetMeta(r.Context(), req.FeedName, req.GUID, req.TotalBytes, req.FileCount, req.DirCount); err != nil {
+	if err := h.items.SetMeta(r.Context(), req.FeedName, req.GUID, req.InfoHash, req.TotalBytes, req.FileCount, req.DirCount); err != nil {
 		slog.Error("set item meta", "feed", req.FeedName, "guid", req.GUID, "err", err)
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return

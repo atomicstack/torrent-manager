@@ -321,11 +321,19 @@ FROM items i %s %s ORDER BY %s LIMIT ? OFFSET ?
 // returns the meta inline (and tmweb can ship it to the browser at page
 // load). No-op when the row doesn't exist yet — callers rely on the
 // RSS-side Upsert to land the row first.
-func (d *DB) SetMeta(ctx context.Context, feedName, guid string, totalBytes int64, fileCount, dirCount int) error {
+//
+// infoHash is optional: when non-empty, fills in items.info_hash if the
+// row is still missing it (e.g. TrackerB feeds don't carry the hash in
+// the rss guid). Never overwrites a non-empty hash already on the row.
+func (d *DB) SetMeta(ctx context.Context, feedName, guid, infoHash string, totalBytes int64, fileCount, dirCount int) error {
 	_, err := d.db.ExecContext(ctx, `
-UPDATE items SET total_bytes = ?, file_count = ?, dir_count = ?
+UPDATE items SET
+  total_bytes = ?,
+  file_count  = ?,
+  dir_count   = ?,
+  info_hash   = COALESCE(NULLIF(info_hash, ''), NULLIF(?, ''))
 WHERE feed_name = ? AND guid = ?
-`, totalBytes, fileCount, dirCount, feedName, guid)
+`, totalBytes, fileCount, dirCount, infoHash, feedName, guid)
 	return err
 }
 

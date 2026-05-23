@@ -205,7 +205,7 @@ func TestSetMeta_RoundTripsThroughList(t *testing.T) {
 		{FeedName: "f", GUID: "g1", Title: "with meta", FirstSeenAt: now, LastSeenAt: now},
 		{FeedName: "f", GUID: "g2", Title: "no meta", FirstSeenAt: now, LastSeenAt: now},
 	}))
-	require.NoError(t, db.SetMeta(ctx, "f", "g1", 1_610_612_736, 12, 3))
+	require.NoError(t, db.SetMeta(ctx, "f", "g1", "", 1_610_612_736, 12, 3))
 
 	got, err := db.List(ctx, itemsdb.ListQuery{IncludeEnqueued: true, Limit: 10})
 	require.NoError(t, err)
@@ -235,6 +235,31 @@ func TestSetMeta_RoundTripsThroughList(t *testing.T) {
 	}
 }
 
+// TestSetMeta_BackfillsInfoHashWhenMissing covers the TrackerB case: the rss
+// feed didn't carry the hash so the Upsert left it null; the post-parse
+// SetMeta must fill it in so the enqueued-badge join (items.info_hash =
+// enqueues.info_hash) matches. Pre-filled rows must not be overwritten.
+func TestSetMeta_BackfillsInfoHashWhenMissing(t *testing.T) {
+	db := tmpDB(t)
+	ctx := context.Background()
+	now := time.Unix(1_700_000_000, 0)
+	require.NoError(t, db.Upsert(ctx, []itemsdb.Item{
+		{FeedName: "TrackerB (Movies)", GUID: "g1", Title: "no hash from rss", FirstSeenAt: now, LastSeenAt: now},
+		{FeedName: "TrackerA (TV)", GUID: "g2", Title: "hash from rss", InfoHash: "AAAA1111AAAA1111AAAA1111AAAA1111AAAA1111", FirstSeenAt: now, LastSeenAt: now},
+	}))
+	require.NoError(t, db.SetMeta(ctx, "TrackerB (Movies)", "g1", "DEAD" + "BEEF" + "00000000000000000000000000000000", 100, 1, 0))
+	require.NoError(t, db.SetMeta(ctx, "TrackerA (TV)", "g2", "BBBB" + "2222" + "BBBB2222BBBB2222BBBB2222BBBB2222", 200, 1, 0))
+
+	got, err := db.List(ctx, itemsdb.ListQuery{IncludeEnqueued: true, Limit: 10})
+	require.NoError(t, err)
+	byGUID := map[string]itemsdb.Item{}
+	for _, it := range got {
+		byGUID[it.GUID] = it
+	}
+	assert.Equal(t, "DEADBEEF00000000000000000000000000000000", byGUID["g1"].InfoHash, "missing hash backfilled from SetMeta")
+	assert.Equal(t, "AAAA1111AAAA1111AAAA1111AAAA1111AAAA1111", byGUID["g2"].InfoHash, "existing hash preserved (SetMeta must not overwrite)")
+}
+
 // TestMigration_AddsMetaColumns seeds a pre-meta schema and confirms Open
 // adds the new columns idempotently. Re-opening must not fail.
 func TestMigration_AddsMetaColumns(t *testing.T) {
@@ -260,7 +285,7 @@ VALUES ('f', 'g1', 't', 1, 1)`)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
-	require.NoError(t, db.SetMeta(context.Background(), "f", "g1", 100, 2, 1))
+	require.NoError(t, db.SetMeta(context.Background(), "f", "g1", "", 100, 2, 1))
 	got, err := db.List(context.Background(), itemsdb.ListQuery{IncludeEnqueued: true, Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, got, 1)

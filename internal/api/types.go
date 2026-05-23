@@ -56,10 +56,14 @@ type ItemRecord struct {
 }
 
 // ItemMetaRequest is POST /v1/items/meta's body — the parsed-torrent meta
-// for one (feed, guid) tuple, recorded after a fetch + parse.
+// for one (feed, guid) tuple, recorded after a fetch + parse. InfoHash is
+// optional: feeds like TrackerA embed it in the GUID and the items row already
+// has it post-Upsert, but feeds like TrackerB don't — so we let the post-
+// parse path fill it in so the enqueued-badge join can find a match.
 type ItemMetaRequest struct {
 	FeedName   string `json:"feed_name"`
 	GUID       string `json:"guid"`
+	InfoHash   string `json:"info_hash,omitempty"`
 	TotalBytes int64  `json:"total_bytes"`
 	FileCount  int    `json:"file_count"`
 	DirCount   int    `json:"dir_count"`

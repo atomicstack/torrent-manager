@@ -174,10 +174,10 @@ func (s *Seedctl) ListDirs(ctx context.Context, rootName string) (api.DirsListRe
 // the next page load ships the meta inline to the browser. Best-effort —
 // callers log and continue on error rather than failing the user-visible
 // enqueue.
-func (s *Seedctl) SetItemMeta(ctx context.Context, feed, guid string, totalBytes int64, fileCount, dirCount int) error {
+func (s *Seedctl) SetItemMeta(ctx context.Context, feed, guid, infoHash string, totalBytes int64, fileCount, dirCount int) error {
 	u := s.base + "/v1/items/meta"
 	body, err := json.Marshal(api.ItemMetaRequest{
-		FeedName: feed, GUID: guid,
+		FeedName: feed, GUID: guid, InfoHash: infoHash,
 		TotalBytes: totalBytes, FileCount: fileCount, DirCount: dirCount,
 	})
 	if err != nil {
