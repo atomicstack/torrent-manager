@@ -23,6 +23,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -212,6 +213,7 @@ func newMux(
 	mux.HandleFunc("GET /{$}", h.index)
 	mux.HandleFunc("GET /api/search", h.search)
 	mux.HandleFunc("GET /api/enqueue-confirm", h.enqueueConfirm)
+	mux.HandleFunc("GET /api/enqueue-classify", h.enqueueClassify)
 	mux.HandleFunc("POST /api/enqueue", h.enqueueDo)
 	mux.Handle("GET /static/", staticHandler())
 	return mux
@@ -310,56 +312,91 @@ func (h *handler) confirmRuleMatched(w http.ResponseWriter, it api.ItemRecord) {
 // disabled, seedctl down, claude error, missing roots) renders the same
 // modal with an empty field + AutoPickFailed=true so the user always has
 // somewhere to type the path.
+// confirmNoRuleData is the data the no-rule modal template receives. The
+// LoadingURL field is non-empty only for the tv path where we want the modal
+// to open instantly and let htmx fire the slow claude lookup in the background.
+// For movies / other / ai-disabled paths the form is rendered inline and
+// LoadingURL stays empty.
+type confirmNoRuleData struct {
+	Item            api.ItemRecord
+	Category        string
+	ProposedSaveDir string
+	ClaudePicked    bool
+	AutoPickFailed  bool
+	LoadingURL      string
+}
+
 func (h *handler) confirmNoRule(w http.ResponseWriter, ctx context.Context, it api.ItemRecord) {
 	category := h.feedCategories[it.FeedName]
-	data := struct {
-		Item            api.ItemRecord
-		Category        string
-		ProposedSaveDir string
-		ClaudePicked    bool
-		AutoPickFailed  bool
-	}{Item: it, Category: category}
+	data := confirmNoRuleData{Item: it, Category: category}
 
 	switch category {
 	case "movies":
-		// movies just live under roots.Movies — no subdir convention. We
-		// still surface the path in an editable input so the user can drop
-		// the release into a per-film subdir if they want one.
+		// movies just live under roots.Movies — no subdir convention. Render
+		// the form inline; no claude call needed.
 		data.ProposedSaveDir = h.roots.Movies
 	case "tv":
 		if h.ai == nil {
 			// ANTHROPIC_API_KEY missing: skip the claude call and let the
-			// user enter the dir manually.
+			// user enter the dir manually. Render the form inline.
 			data.AutoPickFailed = true
 			break
 		}
-		dirs, err := h.seedctl.ListDirs(ctx, "tv")
-		if err != nil {
-			// seedctl down or 5xx: don't block the user, just flag it.
-			slog.Warn("list_dirs_failed", "err", err)
-			data.AutoPickFailed = true
-			break
-		}
-		res, err := h.ai.PickDir(ctx, it.Title, dirs.Dirs)
-		if err != nil {
-			// claude error or malformed response: fall back to manual.
-			slog.Warn("aiclassify_pickdir_failed", "title", it.Title, "err", err)
-			data.AutoPickFailed = true
-			break
-		}
-		if h.roots.TV != "" && res.ShowDir != "" && res.Season > 0 {
-			data.ProposedSaveDir = filepath.Join(h.roots.TV, res.ShowDir, fmt.Sprintf("season%d", res.Season))
-			data.ClaudePicked = true
-		} else {
-			// claude couldn't figure out a show+season (or roots.TV unset).
-			data.AutoPickFailed = true
-		}
+		// Tv path: return the modal shell with a loading state immediately.
+		// htmx fires GET /api/enqueue-classify on load; that endpoint does
+		// the slow seedctl + claude calls and returns the form fragment
+		// to outerHTML-swap the loading placeholder.
+		data.LoadingURL = fmt.Sprintf("/api/enqueue-classify?feed=%s&guid=%s",
+			url.QueryEscape(it.FeedName), url.QueryEscape(it.GUID))
 	default:
-		// "other" / unknown: no automatic proposal. User enters something
-		// or leaves it blank to inherit rtorrent's default download dir.
+		// "other" / unknown: render the form inline with an empty path.
 	}
 	if err := h.r.confirmNoRule.Execute(w, data); err != nil {
 		slog.Error("render_confirm_norule", "err", err)
+	}
+}
+
+// enqueueClassify performs the slow path of the no-rule tv flow: ask seedctl
+// for the existing show dirs, ask claude to pick the best fit + extract the
+// season, and return just the inner <form> fragment that outerHTML-swaps the
+// loading placeholder inside the open modal. Always 200: a swap that includes
+// "auto-classify failed" is still useful to the user.
+func (h *handler) enqueueClassify(w http.ResponseWriter, req *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	q := req.URL.Query()
+	it, err := h.lookupItem(req.Context(), q.Get("feed"), q.Get("guid"))
+	if err != nil {
+		// Best-effort fragment so the modal shows the error inline. Skip the
+		// form entirely (user has no actionable item id without a successful
+		// lookup); render a small note + cancel button.
+		fmt.Fprintf(w, `<p class="modal-note">lookup failed: %s</p>
+<div class="modal-actions">
+  <button type="button" class="btn-cancel"
+          hx-on:click="document.getElementById('modal').innerHTML=''">close</button>
+</div>`, html.EscapeString(err.Error()))
+		return
+	}
+
+	data := confirmNoRuleData{Item: it, Category: h.feedCategories[it.FeedName]}
+	dirs, err := h.seedctl.ListDirs(req.Context(), "tv")
+	if err != nil {
+		slog.Warn("list_dirs_failed", "err", err)
+		data.AutoPickFailed = true
+	} else {
+		res, err := h.ai.PickDir(req.Context(), it.Title, dirs.Dirs)
+		if err != nil {
+			slog.Warn("aiclassify_pickdir_failed", "title", it.Title, "err", err)
+			data.AutoPickFailed = true
+		} else if h.roots.TV != "" && res.ShowDir != "" && res.Season > 0 {
+			data.ProposedSaveDir = filepath.Join(h.roots.TV, res.ShowDir, fmt.Sprintf("season%d", res.Season))
+			data.ClaudePicked = true
+		} else {
+			data.AutoPickFailed = true
+		}
+	}
+
+	if err := h.r.enqueueForm.ExecuteTemplate(w, "_enqueue_form.html", data); err != nil {
+		slog.Error("render_enqueue_form", "err", err)
 	}
 }
 

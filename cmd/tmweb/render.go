@@ -36,6 +36,11 @@ type renderer struct {
 	rows          *template.Template
 	confirm       *template.Template
 	confirmNoRule *template.Template
+	// enqueueForm is the inner <form> fragment shared by the no-rule modal
+	// (when claude has already responded) and by GET /api/enqueue-classify
+	// (the async claude lookup returns just this fragment to outerHTML-swap
+	// the loading placeholder).
+	enqueueForm *template.Template
 }
 
 // newRenderer parses the embedded templates and returns a ready-to-execute
@@ -54,11 +59,26 @@ func newRenderer() (*renderer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse confirm: %w", err)
 	}
-	confirmNoRule, err := template.New("_confirm_norule.html").Funcs(funcMap).ParseFS(templatesFS, "templates/_confirm_norule.html")
+	// _confirm_norule.html embeds the _enqueue_form.html partial via {{template ...}},
+	// so they share one parse set. The classify endpoint also renders just the
+	// form partial; we hold a separate template handle for that.
+	confirmNoRule, err := template.New("_confirm_norule.html").Funcs(funcMap).
+		ParseFS(templatesFS, "templates/_confirm_norule.html", "templates/_enqueue_form.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse confirm_norule: %w", err)
 	}
-	return &renderer{layout: layout, rows: rows, confirm: confirm, confirmNoRule: confirmNoRule}, nil
+	enqueueForm, err := template.New("_enqueue_form.html").Funcs(funcMap).
+		ParseFS(templatesFS, "templates/_enqueue_form.html")
+	if err != nil {
+		return nil, fmt.Errorf("parse enqueue_form: %w", err)
+	}
+	return &renderer{
+		layout:        layout,
+		rows:          rows,
+		confirm:       confirm,
+		confirmNoRule: confirmNoRule,
+		enqueueForm:   enqueueForm,
+	}, nil
 }
 
 // humanAgo returns a coarse human-readable relative time given a unix-seconds

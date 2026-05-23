@@ -38,6 +38,10 @@ Respond with strict JSON only, matching this schema (no prose, no code fence):
 Rules:
   - "show_dir" must equal an element of the existingDirs list exactly, or be a
     new short lowercase dot-separated name you propose.
+  - "show_dir" must contain ONLY characters [a-z0-9.] — lowercase letters, digits,
+    and dots as separators. No commas, apostrophes, parentheses, spaces, dashes,
+    or any other punctuation. Year suffixes ("2024") are fine when the source
+    title carries a year. Never leave a trailing dot or comma.
   - "season" is an integer >= 0. 0 means the title didn't carry a season number.
   - "is_new_dir" must be true if show_dir is not present in existingDirs (case-
     sensitive), otherwise false.`
@@ -111,6 +115,22 @@ func (c *Client) PickDir(ctx context.Context, title string, existingDirs []strin
 			return PickDirResult{}, fmt.Errorf("aiclassify pickdir: parse response json: %w", err)
 		}
 
+		// defence in depth: even with explicit prompt rules, the model occasionally
+		// emits stray punctuation ("pop.culture.jeopardy,") that would land in the
+		// save_dir path. normalise here so callers never see invalid filename
+		// characters. only applies when is_new_dir would be true post-membership-
+		// check — exact matches against existingDirs are trusted as-is.
+		inExisting := false
+		for _, d := range existingDirs {
+			if d == res.ShowDir {
+				inExisting = true
+				break
+			}
+		}
+		if !inExisting {
+			res.ShowDir = sanitiseDirName(res.ShowDir)
+		}
+
 		// reject obviously bogus replies so the caller knows to fall back to manual.
 		if res.ShowDir == "" {
 			return PickDirResult{}, fmt.Errorf("aiclassify pickdir: model returned empty show_dir")
@@ -119,17 +139,27 @@ func (c *Client) PickDir(ctx context.Context, title string, existingDirs []strin
 			return PickDirResult{}, fmt.Errorf("aiclassify pickdir: model returned negative season %d", res.Season)
 		}
 
-		// double-check the is_new_dir flag matches reality so a confused model can't
-		// silently claim a new dir is an existing one or vice versa.
-		inExisting := false
-		for _, d := range existingDirs {
-			if d == res.ShowDir {
-				inExisting = true
-				break
-			}
-		}
 		res.IsNewDir = !inExisting
 		return res, nil
 	}
 	return PickDirResult{}, fmt.Errorf("aiclassify pickdir: no text block in response")
+}
+
+// sanitiseDirName lowercases and strips any character outside [a-z0-9.], so
+// stray punctuation in the model's proposed name can't bleed into a filesystem
+// path. Runs of non-alphanumeric chars collapse to a single dot; leading and
+// trailing dots are trimmed.
+func sanitiseDirName(s string) string {
+	var b strings.Builder
+	inSep := true
+	for _, r := range strings.ToLower(s) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			inSep = false
+		} else if !inSep {
+			b.WriteByte('.')
+			inSep = true
+		}
+	}
+	return strings.Trim(b.String(), ".")
 }

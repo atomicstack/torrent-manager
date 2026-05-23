@@ -14,6 +14,8 @@ import (
 
 	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/metainfo"
+	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/atomicstack/torrent-manager/internal/aiclassify"
 	"github.com/atomicstack/torrent-manager/internal/api"
 	"github.com/atomicstack/torrent-manager/internal/feed"
 	"github.com/atomicstack/torrent-manager/internal/savedir"
@@ -540,4 +542,101 @@ func TestEnqueueDo_TrackerFailureRendersErrorRow(t *testing.T) {
 	body := rr.Body.String()
 	assert.Contains(t, body, "enqueue failed")
 	assert.Contains(t, body, "status 403")
+}
+
+// TestEnqueueConfirm_NoRule_TV_RendersLoadingShell verifies the new fast-path
+// behaviour from the modal-loading UX change: when ai is configured, the tv
+// no-rule branch returns the modal shell *immediately* with a loading
+// placeholder + an hx-get pointing at /api/enqueue-classify. The classify
+// endpoint is what eventually does the slow claude call.
+func TestEnqueueConfirm_NoRule_TV_RendersLoadingShell(t *testing.T) {
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/items" {
+			_ = json.NewEncoder(w).Encode(api.ItemsListResponse{Items: []api.ItemRecord{
+				{FeedName: "TrackerB (TV)", GUID: "g1", Title: "Severance.S02E01.1080p", LastSeenAt: time.Now().Unix()},
+			}})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(stub.Close)
+
+	r, err := newRenderer()
+	require.NoError(t, err)
+	// non-nil ai client — points at an unused stub since enqueue-confirm
+	// shouldn't actually invoke claude (that happens in /api/enqueue-classify).
+	anthropicStub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Errorf("claude should NOT be called by enqueue-confirm; only by enqueue-classify")
+		w.WriteHeader(500)
+	}))
+	t.Cleanup(anthropicStub.Close)
+	ai := aiclassify.New("test", option.WithBaseURL(anthropicStub.URL))
+
+	mux := newMux(NewSeedctl(stub.URL, stub.Client()),
+		[]string{"TrackerB (TV)"}, nil,
+		map[string]string{"TrackerB (TV)": "tv"},
+		nil, savedir.Roots{TV: "/t/tv"},
+		ai, r)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet,
+		"/api/enqueue-confirm?feed=TrackerB+%28TV%29&guid=g1", nil))
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := rr.Body.String()
+	assert.Contains(t, body, "no watchlist rule matched", "modal opens immediately")
+	assert.Contains(t, body, "asking claude", "loading placeholder visible")
+	assert.Contains(t, body, "classify-loading", "css hook present for the progress bar")
+	assert.Regexp(t, regexp.MustCompile(`hx-get="/api/enqueue-classify\?feed=TrackerB[^"]+"`), body,
+		"hx-get fires the classify endpoint")
+	assert.NotContains(t, body, `name="save_dir"`, "form is NOT inline yet — it gets swapped in later")
+}
+
+// TestEnqueueClassify_RendersForm covers the slow path returned to htmx after
+// the loading placeholder fires. It exercises the seedctl /v1/dirs round-trip
+// + the aiclassify call (against a stubbed anthropic server) and asserts the
+// proposed save_dir lands in the rendered form.
+func TestEnqueueClassify_RendersForm(t *testing.T) {
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/items":
+			_ = json.NewEncoder(w).Encode(api.ItemsListResponse{Items: []api.ItemRecord{
+				{FeedName: "TrackerB (TV)", GUID: "g1", Title: "Severance.S02E01.1080p"},
+			}})
+		case "/v1/dirs":
+			_ = json.NewEncoder(w).Encode(api.DirsListResponse{Dirs: []string{"beef", "severance"}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(stub.Close)
+
+	anthropicStub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"id": "msg_test",
+			"type": "message",
+			"role": "assistant",
+			"model": "claude-opus-4-7",
+			"content": [{"type": "text", "text": "{\"show_dir\": \"severance\", \"season\": 2, \"is_new_dir\": false}"}],
+			"stop_reason": "end_turn",
+			"usage": {"input_tokens": 50, "output_tokens": 15}
+		}`)
+	}))
+	t.Cleanup(anthropicStub.Close)
+	ai := aiclassify.New("test", option.WithBaseURL(anthropicStub.URL))
+
+	r, err := newRenderer()
+	require.NoError(t, err)
+	mux := newMux(NewSeedctl(stub.URL, stub.Client()),
+		[]string{"TrackerB (TV)"}, nil,
+		map[string]string{"TrackerB (TV)": "tv"},
+		nil, savedir.Roots{TV: "/t/tv"},
+		ai, r)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet,
+		"/api/enqueue-classify?feed=TrackerB+%28TV%29&guid=g1", nil))
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := rr.Body.String()
+	assert.Contains(t, body, `value="/t/tv/severance/season2"`, "claude's proposal lands in the input")
+	assert.Contains(t, body, "claude suggested the path below", "notice rendered")
+	assert.Contains(t, body, `name="save_dir"`, "form input present")
 }

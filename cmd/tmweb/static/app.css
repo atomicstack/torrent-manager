@@ -242,6 +242,36 @@ th, td {
   color: var(--fg);
 }
 
+/* indeterminate progress bar shown while claude classifies a no-rule tv item. */
+.classify-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.75rem 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.classify-loading .bar {
+  flex: 1;
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+}
+.classify-loading .bar .fill {
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 30%;
+  background: var(--accent);
+  border-radius: 2px;
+  animation: classify-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes classify-shimmer {
+  0%   { left: -35%; }
+  100% { left: 100%; }
+}
+
 /* mobile card layout */
 @media (max-width: 600px) {
   table, thead, tbody, tr, td, th { display: block; }

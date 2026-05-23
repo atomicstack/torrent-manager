@@ -144,3 +144,38 @@ func TestPickDir_MalformedJSON(t *testing.T) {
 	_, err := c.PickDir(context.Background(), "Severance.S02E01.1080p", []string{"severance"})
 	require.Error(t, err)
 }
+
+// TestPickDir_SanitisesProposedDirName guards against the regression where
+// Claude appended stray punctuation ("pop.culture.jeopardy,") to a proposed
+// new dir name. The package strips anything outside [a-z0-9.] before handing
+// the value back to the caller.
+func TestPickDir_SanitisesProposedDirName(t *testing.T) {
+	c := newPickDirTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(okPickDirResponse(`{\"show_dir\": \"pop.culture.jeopardy,\", \"season\": 2, \"is_new_dir\": true}`)))
+	}))
+	res, err := c.PickDir(context.Background(),
+		"Pop.Culture.Jeopardy.S02E10.1080p.WEB.h264-EDITH.mkv",
+		[]string{"beef", "severance"})
+	require.NoError(t, err)
+	assert.Equal(t, "pop.culture.jeopardy", res.ShowDir, "trailing comma stripped")
+	assert.Equal(t, 2, res.Season)
+	assert.True(t, res.IsNewDir)
+}
+
+// TestPickDir_DoesNotSanitiseExistingDirNames ensures we trust an exact match
+// from the existingDirs list as-is. The list itself is canonical (it's the
+// on-disk filesystem listing) so we shouldn't second-guess it even if it
+// contains characters our sanitiser would strip.
+func TestPickDir_DoesNotSanitiseExistingDirNames(t *testing.T) {
+	c := newPickDirTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(okPickDirResponse(`{\"show_dir\": \"Guy Mont Spelling Bee\", \"season\": 1, \"is_new_dir\": false}`)))
+	}))
+	res, err := c.PickDir(context.Background(),
+		"Guy Montgomery's Guy Mont-Spelling Bee S01E01",
+		[]string{"Guy Mont Spelling Bee", "severance"})
+	require.NoError(t, err)
+	assert.Equal(t, "Guy Mont Spelling Bee", res.ShowDir, "exact match preserved verbatim")
+	assert.False(t, res.IsNewDir)
+}
