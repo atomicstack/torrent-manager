@@ -94,7 +94,6 @@ th, td {
   gap: 0.4rem;
   align-items: baseline;
   font-size: 0.75rem;
-  text-transform: uppercase;
   color: var(--muted);
   white-space: nowrap;
 }
