@@ -312,7 +312,10 @@ th, td {
   transition: background 0.12s ease;
 }
 .btn-classify:hover { background: var(--border); }
-.btn-classify.htmx-request { pointer-events: none; }
+/* while a classify stream is in flight on this row, the ✨ button is
+   non-interactive so a stray double-click doesn't open a second
+   EventSource on top of the first one. */
+.form-row-block.classifying .btn-classify { pointer-events: none; }
 
 /* in-flight enqueue progress: shimmer + step list slot in directly under
    the save_dir input row (same position as the classify shimmer) so the
@@ -361,22 +364,20 @@ form.htmx-request .step-list .step-3.step::before {
   content: '⟳';
 }
 
-/* classify-step animations: same lighting cadence as the submit steps but
-   scoped to the form-row-block while the ✨ button is in-flight. timings
-   are rough (server-side fetch is ~0.5-1s, parse + cache are near-instant,
-   claude takes ~1-3s) — the last step lingers until the swap arrives, so
-   a slow claude leaves "querying claude" highlighted rather than racing
-   past the truth. */
-.form-row-block:has(.btn-classify.htmx-request) .classify-step-1 { animation: step-active 0.6s ease-out forwards; }
-.form-row-block:has(.btn-classify.htmx-request) .classify-step-2 { animation: step-active 0.5s ease-out forwards 0.5s; }
-.form-row-block:has(.btn-classify.htmx-request) .classify-step-3 { animation: step-active 0.5s ease-out forwards 0.85s; }
-.form-row-block:has(.btn-classify.htmx-request) .classify-step-4 { animation: step-active 1.5s ease-out forwards 1.2s; }
-.form-row-block:has(.btn-classify.htmx-request) .classify-step-1.step::before,
-.form-row-block:has(.btn-classify.htmx-request) .classify-step-2.step::before,
-.form-row-block:has(.btn-classify.htmx-request) .classify-step-3.step::before,
-.form-row-block:has(.btn-classify.htmx-request) .classify-step-4.step::before {
-  content: '⟳';
+/* classify-step states. driven by the SSE handler in layout.html (no
+   time-based animations). default is "pending" (the global .step rule:
+   dim, ○ marker). step-active is the in-flight step (bright accent, ⟳
+   marker). step-done is a completed step (faded fg, ✓ marker). */
+.classify-loading .step.step-active {
+  opacity: 1;
+  color: var(--accent);
 }
+.classify-loading .step.step-active::before { content: '⟳'; }
+.classify-loading .step.step-done {
+  opacity: 0.7;
+  color: var(--fg);
+}
+.classify-loading .step.step-done::before { content: '✓'; }
 
 /* indeterminate progress bar (with a step list underneath) shown while
    either claude classifies (✨ click) or seedctl enqueues (form submit).
@@ -390,7 +391,7 @@ form.htmx-request .step-list .step-3.step::before {
   font-size: 0.85rem;
   color: var(--muted);
 }
-.form-row-block:has(.btn-classify.htmx-request) .classify-loading { display: block; }
+.form-row-block.classifying .classify-loading { display: block; }
 .classify-loading .bar {
   width: 100%;
   height: 4px;

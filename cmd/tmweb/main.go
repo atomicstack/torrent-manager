@@ -14,12 +14,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"html"
+	"html/template"
 	"io"
 	"log/slog"
 	"net/http"
@@ -413,6 +415,12 @@ func (h *handler) confirmRuleMatched(w http.ResponseWriter, ctx context.Context,
 // to the save_dir input — only the tv path with a working ai client gets it.
 // Clicking the icon fires /api/enqueue-classify, which returns just the
 // _enqueue_form_row.html partial with the populated proposal.
+//
+// Meta is the parsed torrent payload (size + counts), populated only after
+// the ✨ click has fetched + parsed the .torrent. nil on the initial modal
+// render. OOB toggles the hx-swap-oob="true" attribute on the metadata dl
+// — set true when rendering the dl as part of the classify response so it
+// replaces the dl already in the modal.
 type confirmNoRuleData struct {
 	Item            api.ItemRecord
 	Category        string
@@ -422,6 +430,47 @@ type confirmNoRuleData struct {
 	ClaudeAvailable bool
 	CommonRoot      string
 	Completions     []string
+	Meta            *torrentMeta
+	OOB             bool
+}
+
+// torrentMeta is the lightweight view the modal needs once we've fetched
+// and parsed the .torrent. BytesHuman is pre-formatted (e.g. "1.50 GiB")
+// so the template doesn't have to know about size unit logic. DirCount
+// includes the wrapper info.name for multi-file torrents; single-file
+// torrents have DirCount = 0 (no wrapper, the file itself is top-level).
+type torrentMeta struct {
+	Bytes      int64
+	BytesHuman string
+	FileCount  int
+	DirCount   int
+}
+
+// toTorrentMeta builds the modal view from a parsed torrent. Counts unique
+// internal directories from the file paths (joined with "/", relative to
+// info.name) and adds 1 for the wrapper for multi-file torrents.
+func toTorrentMeta(m torrent.Metadata) *torrentMeta {
+	out := &torrentMeta{
+		Bytes:      m.TotalBytes,
+		BytesHuman: torrent.HumanBytes(m.TotalBytes),
+		FileCount:  m.FileCount,
+	}
+	if !m.SingleFile {
+		out.DirCount = 1 // info.name wrapper
+		seen := make(map[string]bool)
+		for _, f := range m.Files {
+			parts := strings.Split(f.Path, "/")
+			for i := 1; i < len(parts); i++ {
+				d := strings.Join(parts[:i], "/")
+				if d == "" || seen[d] {
+					continue
+				}
+				seen[d] = true
+				out.DirCount++
+			}
+		}
+	}
+	return out
 }
 
 // confirmNoRule renders the _confirm_norule.html modal with a category-
@@ -454,20 +503,36 @@ func (h *handler) confirmNoRule(w http.ResponseWriter, ctx context.Context, it a
 	}
 }
 
-// enqueueClassify is triggered when the user clicks the ✨ icon next to the
-// save_dir input. It fetches the .torrent (caching the bytes + parsed
-// contents + info hash for the subsequent enqueue POST), asks seedctl for
-// the existing tv dirs, asks claude to pick a show + season subdir from
-// both the title AND the torrent's actual file layout, then returns the
-// _enqueue_form_row partial for an outerHTML swap. Always 200 — a row that
-// includes "auto-classify failed" is still useful.
+// enqueueClassify streams progress to the ✨ classify button via SSE. each
+// server-side step (fetching → parsing → caching → querying) emits a
+// `step` event; the parsed torrent metadata is OOB-swapped into the
+// modal's #torrent-meta dl as soon as parsing succeeds; and the final
+// form-row-block HTML is delivered as a `form` event for the JS handler
+// to swap into the open modal. Failures still result in a `form` event
+// (with AutoPickFailed=true) so the user always gets an editable input
+// back to fall through to manual entry.
 func (h *handler) enqueueClassify(w http.ResponseWriter, req *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "sse unsupported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	flusher.Flush()
+
+	send := func(event, data string) {
+		writeSSEEvent(w, flusher, event, data)
+	}
+	sendStep := func(name string) { send("step", name) }
+
 	q := req.URL.Query()
 	it, err := h.lookupItem(req.Context(), q.Get("feed"), q.Get("guid"))
 	if err != nil {
-		fmt.Fprintf(w, `<div class="form-row-block"><p class="modal-note">lookup failed: %s</p></div>`,
-			html.EscapeString(err.Error()))
+		send("form", fmt.Sprintf(
+			`<div class="form-row-block"><p class="modal-note">lookup failed: %s</p></div>`,
+			html.EscapeString(err.Error())))
 		return
 	}
 
@@ -478,48 +543,155 @@ func (h *handler) enqueueClassify(w http.ResponseWriter, req *http.Request) {
 		CommonRoot:      h.commonRoot,
 	}
 
-	switch {
-	case h.ai == nil:
+	// fall through to the "auto-classify failed" form-row if we can't make
+	// any forward progress (no api key, fetch fails, claude fails, etc.).
+	fail := func() {
 		data.AutoPickFailed = true
-	default:
-		entry, err := h.ensureTorrentCached(req.Context(), it)
-		if err != nil {
-			slog.Warn("fetch_or_parse_torrent_failed", "feed", it.FeedName, "guid", it.GUID, "err", err)
-			data.AutoPickFailed = true
-			break
-		}
-		dirs, err := h.seedctl.ListDirs(req.Context(), "tv")
-		if err != nil {
-			slog.Warn("list_dirs_failed", "err", err)
-			data.AutoPickFailed = true
-			break
-		}
-		contents := aiclassify.TorrentContents{
-			Name:       entry.Meta.Name,
-			SingleFile: entry.Meta.SingleFile,
-			Files:      filePaths(entry.Meta.Files),
-		}
-		res, err := h.ai.PickDir(req.Context(), it.Title, dirs.Dirs, contents)
-		if err != nil {
-			slog.Warn("aiclassify_pickdir_failed", "title", it.Title, "err", err)
-			data.AutoPickFailed = true
-			break
-		}
-		if h.roots.TV == "" || res.ShowDir == "" {
-			data.AutoPickFailed = true
-			break
-		}
-		// res.Subdir is "" when the torrent already carries its own season
-		// folder; filepath.Join collapses empty components, so the joined
-		// path is simply <tv>/<show> in that case.
-		abs := filepath.Join(h.roots.TV, res.ShowDir, res.Subdir)
-		data.ProposedSaveDir = h.stripPrefix(abs)
-		data.ClaudePicked = true
+		h.sendClassifyForm(send, data)
 	}
 
-	if err := h.r.enqueueFormRow.ExecuteTemplate(w, "_enqueue_form_row.html", data); err != nil {
-		slog.Error("render_enqueue_form_row", "err", err)
+	if h.ai == nil {
+		fail()
+		return
 	}
+
+	entry, ok := h.torrents.Get(it.FeedName, it.GUID)
+	if ok {
+		// cache hit (e.g. the user already classified and is re-clicking
+		// before the ttl expires) — emit the early steps for visual
+		// consistency but skip the actual fetch/parse/hash work.
+		sendStep("fetching")
+		sendStep("parsing")
+		sendStep("caching")
+	} else {
+		sendStep("fetching")
+		cookie := os.Getenv(h.cookieEnvFor(it.FeedName))
+		body, ferr := fetchTorrent(req.Context(), it.Link, cookie)
+		if ferr != nil {
+			slog.Warn("fetch_torrent_failed", "feed", it.FeedName, "guid", it.GUID, "err", ferr)
+			fail()
+			return
+		}
+		sendStep("parsing")
+		meta, perr := torrent.Parse(body)
+		if perr != nil {
+			slog.Warn("parse_torrent_failed", "feed", it.FeedName, "guid", it.GUID, "err", perr)
+			fail()
+			return
+		}
+		hash := it.InfoHash
+		if hash == "" {
+			h2, herr := feed.ComputeHashFromTorrentBytes(body)
+			if herr != nil {
+				slog.Warn("compute_hash_failed", "err", herr)
+				fail()
+				return
+			}
+			hash = h2
+		}
+		sendStep("caching")
+		entry = &cachedTorrent{Bytes: body, Meta: meta, InfoHash: hash}
+		h.torrents.Put(it.FeedName, it.GUID, entry)
+	}
+
+	data.Meta = toTorrentMeta(entry.Meta)
+	// emit the OOB meta dl now so size + contents appear in the modal
+	// before claude even starts thinking — most of the user-perceived
+	// latency from here on is the claude call.
+	metaHTML, err := renderTemplate(h.r.torrentMeta, "_torrent_meta.html", withOOB(data))
+	if err != nil {
+		slog.Error("render_torrent_meta_oob", "err", err)
+	} else {
+		send("meta", metaHTML)
+	}
+
+	sendStep("querying")
+	dirs, derr := h.seedctl.ListDirs(req.Context(), "tv")
+	if derr != nil {
+		slog.Warn("list_dirs_failed", "err", derr)
+		fail()
+		return
+	}
+	contents := aiclassify.TorrentContents{
+		Name:       entry.Meta.Name,
+		SingleFile: entry.Meta.SingleFile,
+		Files:      filePaths(entry.Meta.Files),
+	}
+	res, cerr := h.ai.PickDir(req.Context(), it.Title, dirs.Dirs, contents)
+	if cerr != nil {
+		slog.Warn("aiclassify_pickdir_failed", "title", it.Title, "err", cerr)
+		fail()
+		return
+	}
+	if h.roots.TV == "" || res.ShowDir == "" {
+		fail()
+		return
+	}
+	// res.Subdir is "" when the torrent already carries its own season
+	// folder; filepath.Join collapses empty components, so the joined
+	// path is simply <tv>/<show> in that case.
+	abs := filepath.Join(h.roots.TV, res.ShowDir, res.Subdir)
+	data.ProposedSaveDir = h.stripPrefix(abs)
+	data.ClaudePicked = true
+	h.sendClassifyForm(send, data)
+}
+
+// sendClassifyForm renders the form-row-block partial into a `form` event,
+// which the SSE client handler swaps into the open modal in place of the
+// previous .form-row-block. Always called once, as the terminal event of
+// the SSE stream.
+func (h *handler) sendClassifyForm(send func(event, data string), d confirmNoRuleData) {
+	body, err := renderTemplate(h.r.enqueueFormRow, "_enqueue_form_row.html", d)
+	if err != nil {
+		slog.Error("render_enqueue_form_row", "err", err)
+		send("form", fmt.Sprintf(
+			`<div class="form-row-block"><p class="modal-note">render failed: %s</p></div>`,
+			html.EscapeString(err.Error())))
+		return
+	}
+	send("form", body)
+}
+
+// withOOB clones data with the OOB flag set, so the same template can be
+// reused both inline (initial modal render) and as an hx-swap-oob fragment
+// (classify response).
+func withOOB(d confirmNoRuleData) confirmNoRuleData {
+	d.OOB = true
+	return d
+}
+
+// renderTemplate executes the named template against data and returns the
+// rendered string. Centralised so callers don't repeat the bytes.Buffer
+// dance, and so SSE payloads (which need to be assembled before write)
+// share one path with debug logging.
+func renderTemplate(t *template.Template, name string, data any) (string, error) {
+	var buf bytes.Buffer
+	if err := t.ExecuteTemplate(&buf, name, data); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
+// writeSSEEvent writes one SSE event frame and flushes immediately. Each
+// line of `data` becomes its own "data: " field so multi-line HTML bodies
+// are preserved (the spec joins data lines with '\n' before delivery).
+func writeSSEEvent(w io.Writer, flusher http.Flusher, event, data string) {
+	var sb strings.Builder
+	if event != "" {
+		sb.WriteString("event: ")
+		sb.WriteString(event)
+		sb.WriteByte('\n')
+	}
+	for _, line := range strings.Split(data, "\n") {
+		sb.WriteString("data: ")
+		sb.WriteString(line)
+		sb.WriteByte('\n')
+	}
+	sb.WriteByte('\n')
+	if _, err := w.Write([]byte(sb.String())); err != nil {
+		return
+	}
+	flusher.Flush()
 }
 
 // ensureTorrentCached returns a cache entry for the item: a hit if the

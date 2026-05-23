@@ -2,11 +2,7 @@
   <div class="modal-card" onclick="event.stopPropagation()">
     <h2>enqueue (no rule)</h2>
     <p class="modal-note">no watchlist rule matched this title.</p>
-    <dl>
-      <dt>title</dt> <dd>{{.Item.Title}}</dd>
-      <dt>feed</dt>  <dd>{{.Item.FeedName}}{{if .Category}} ({{.Category}}){{end}}</dd>
-      {{if .Item.InfoHash}}<dt>info hash</dt><dd class="mono">{{.Item.InfoHash}}</dd>{{end}}
-    </dl>
+    {{template "_torrent_meta.html" .}}
     {{template "_enqueue_form.html" .}}
   </div>
 </div>

@@ -10,8 +10,8 @@
              placeholder="e.g. tv/severance/season2 (empty = rtorrent default)">
       {{- if and (eq .Category "tv") .ClaudeAvailable -}}
       <button type="button" class="btn-classify" title="ask claude to suggest a path"
-              hx-get="/api/enqueue-classify?feed={{.Item.FeedName | urlquery}}&guid={{.Item.GUID | urlquery}}"
-              hx-target="closest .form-row-block" hx-swap="outerHTML">✨</button>
+              data-classify-url="/api/enqueue-classify?feed={{.Item.FeedName | urlquery}}&guid={{.Item.GUID | urlquery}}"
+              onclick="startClassify(this)">✨</button>
       {{- end -}}
     </span>
   </label>

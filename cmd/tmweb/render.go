@@ -41,6 +41,12 @@ type renderer struct {
 	// to outerHTML-swap the .form-row-block inside the open modal when the
 	// user clicks the ✨ claude icon.
 	enqueueFormRow *template.Template
+	// torrentMeta renders the metadata dl. Same handle is used for the
+	// initial modal render (no OOB attribute) and for the OOB swap fragment
+	// the classify endpoint emits after parsing the torrent (OOB=true → the
+	// dl carries hx-swap-oob="true" so htmx replaces the modal's dl in
+	// place).
+	torrentMeta *template.Template
 }
 
 // newRenderer parses the embedded templates and returns a ready-to-execute
@@ -68,6 +74,7 @@ func newRenderer() (*renderer, error) {
 	confirmNoRule, err := template.New("_confirm_norule.html").Funcs(funcMap).
 		ParseFS(templatesFS,
 			"templates/_confirm_norule.html",
+			"templates/_torrent_meta.html",
 			"templates/_enqueue_form.html",
 			"templates/_enqueue_form_row.html",
 			"templates/_enqueue_progress.html")
@@ -79,12 +86,18 @@ func newRenderer() (*renderer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse enqueue_form_row: %w", err)
 	}
+	torrentMeta, err := template.New("_torrent_meta.html").Funcs(funcMap).
+		ParseFS(templatesFS, "templates/_torrent_meta.html")
+	if err != nil {
+		return nil, fmt.Errorf("parse torrent_meta: %w", err)
+	}
 	return &renderer{
 		layout:         layout,
 		rows:           rows,
 		confirm:        confirm,
 		confirmNoRule:  confirmNoRule,
 		enqueueFormRow: enqueueFormRow,
+		torrentMeta:    torrentMeta,
 	}, nil
 }
 

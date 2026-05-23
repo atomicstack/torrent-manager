@@ -587,8 +587,9 @@ func TestEnqueueConfirm_NoRule_TV_RendersClaudeIcon(t *testing.T) {
 	assert.Contains(t, body, "no watchlist rule matched", "modal opens immediately")
 	assert.Contains(t, body, `name="save_dir"`, "form rendered inline (no async loading)")
 	assert.Contains(t, body, "btn-classify", "claude icon present for tv items when ai is configured")
-	assert.Regexp(t, regexp.MustCompile(`hx-get="/api/enqueue-classify\?feed=TrackerB[^"]+"`), body,
-		"icon fires the classify endpoint")
+	assert.Regexp(t, regexp.MustCompile(`data-classify-url="/api/enqueue-classify\?feed=TrackerB[^"]+"`), body,
+		"icon carries the sse classify endpoint url")
+	assert.Contains(t, body, `onclick="startClassify(this)"`, "icon click is wired to the sse handler")
 }
 
 // TestEnqueueClassify_RendersForm covers the slow path returned to htmx after
@@ -657,11 +658,26 @@ func TestEnqueueClassify_RendersForm(t *testing.T) {
 	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet,
 		"/api/enqueue-classify?feed=TrackerB+%28TV%29&guid=g1", nil))
 	require.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, "text/event-stream", rr.Header().Get("Content-Type"))
 	body := rr.Body.String()
+	// SSE stream: assert the step events fire in order then the final
+	// form event carries the rendered form-row-block + claude's proposal.
+	assert.Contains(t, body, "event: step\ndata: fetching\n")
+	assert.Contains(t, body, "event: step\ndata: parsing\n")
+	assert.Contains(t, body, "event: step\ndata: caching\n")
+	assert.Contains(t, body, "event: meta\n")
+	assert.Contains(t, body, "event: step\ndata: querying\n")
+	assert.Contains(t, body, "event: form\n")
 	// claude's proposal lands as a path relative to the common root (parent
 	// of TV + Movies = "/t/"). server expands it back to /t/tv/severance/season2
-	// on submit.
+	// on submit. (HTML inside SSE data lines is raw, not entity-encoded.)
 	assert.Contains(t, body, `value="tv/severance/season2"`, "claude's proposal lands in the input")
-	assert.Contains(t, body, "claude suggested the path below", "notice rendered")
-	assert.Contains(t, body, `name="save_dir"`, "form input present")
+	assert.Contains(t, body, "claude suggested the path below", "notice rendered in form event")
+	assert.Contains(t, body, `name="save_dir"`, "form input present in form event")
+	assert.Contains(t, body, `id="torrent-meta"`, "OOB meta dl emitted")
+	assert.Contains(t, body, `hx-swap-oob="true"`, "OOB attribute set on meta dl")
+	// size + counts came in the meta event.
+	assert.Regexp(t, regexp.MustCompile(`size.+1 B`), body, "human-readable size in meta dl")
+	assert.Contains(t, body, "📁 0", "single-file torrent reports 0 dirs")
+	assert.Contains(t, body, "📄 1", "single-file torrent reports 1 file")
 }

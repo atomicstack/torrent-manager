@@ -102,6 +102,89 @@
       }
     });
   })();
+
+  // startClassify drives the ✨ claude-classify flow over server-sent events.
+  // each server-side phase emits a "step" event (fetching → parsing →
+  // caching → querying); the parsed metadata arrives as a "meta" event
+  // that OOB-replaces the modal's #torrent-meta dl; the final form-row
+  // arrives as a "form" event and is swapped into the modal in place of
+  // the form-row-block the user clicked from. all step transitions are
+  // driven by real backend progress — no CSS time-based animations.
+  var classifyES = null;  // single in-flight EventSource per page
+  function startClassify(btn) {
+    var formRowBlock = btn.closest('.form-row-block');
+    if (!formRowBlock) return;
+    var url = btn.dataset.classifyUrl;
+    if (!url) return;
+    if (classifyES) { classifyES.close(); classifyES = null; }
+
+    formRowBlock.classList.add('classifying');
+    // reset step state from any previous attempt living in the same dom.
+    formRowBlock.querySelectorAll('.classify-loading .step').forEach(function (li) {
+      li.classList.remove('step-active', 'step-done');
+    });
+
+    var stepIdx = { fetching: 1, parsing: 2, caching: 3, querying: 4 };
+    var lastIdx = null;
+    var done = false;
+    var markDone = function () {
+      if (!lastIdx) return;
+      var prev = formRowBlock.querySelector('.classify-step-' + lastIdx);
+      if (prev) { prev.classList.remove('step-active'); prev.classList.add('step-done'); }
+    };
+
+    var es = new EventSource(url);
+    classifyES = es;
+
+    es.addEventListener('step', function (ev) {
+      var idx = stepIdx[ev.data];
+      if (!idx) return;
+      markDone();
+      lastIdx = idx;
+      var cur = formRowBlock.querySelector('.classify-step-' + idx);
+      if (cur) cur.classList.add('step-active');
+    });
+
+    es.addEventListener('meta', function (ev) {
+      var wrap = document.createElement('div');
+      wrap.innerHTML = ev.data;
+      var newDl = wrap.firstElementChild;
+      var cur = document.getElementById('torrent-meta');
+      if (cur && newDl) cur.replaceWith(newDl);
+    });
+
+    es.addEventListener('form', function (ev) {
+      markDone();
+      done = true;
+      // brief pause so the final "done" tick is visible before we swap
+      // the form-row-block out from under it.
+      setTimeout(function () {
+        var wrap = document.createElement('div');
+        wrap.innerHTML = ev.data;
+        var newBlock = wrap.firstElementChild;
+        if (newBlock) {
+          formRowBlock.replaceWith(newBlock);
+          if (window.htmx) window.htmx.process(newBlock);
+        }
+        es.close();
+        classifyES = null;
+      }, 200);
+    });
+
+    es.onerror = function () {
+      // EventSource also raises onerror on a normal server-side close.
+      // only flag a problem if we haven't received the final form event.
+      if (!done) {
+        formRowBlock.classList.remove('classifying');
+        // surface the failure inline so the modal stays useful — the user
+        // can still type a path manually and submit.
+        var ll = formRowBlock.querySelector('.classify-loading');
+        if (ll) ll.innerHTML = '<p class="modal-note">classify stream interrupted — fill in the destination manually.</p>';
+      }
+      es.close();
+      classifyES = null;
+    };
+  }
   </script>
 </body>
 </html>
