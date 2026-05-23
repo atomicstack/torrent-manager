@@ -278,10 +278,10 @@ func newMux(
 		feedCategories: feedCategories,
 		ai:             ai,
 		commonRoot:     computeCommonRoot(roots),
-		// classify → enqueue handoff is normally a few seconds; 5 minutes
-		// covers slow modal review without holding bytes indefinitely. 50
+		// classify → enqueue handoff is normally a few seconds; 24h lets a
+		// browsed-but-unqueued item sit overnight without a re-fetch. 50
 		// entries × ~100KB/.torrent = ~5MiB worst case.
-		torrents: newTorrentCache(50, 5*time.Minute),
+		torrents: newTorrentCache(50, 24*time.Hour),
 		r:        r,
 	}
 
