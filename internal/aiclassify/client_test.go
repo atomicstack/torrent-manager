@@ -1,9 +1,13 @@
 package aiclassify
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -62,6 +66,37 @@ func TestClassify_MalformedJSON(t *testing.T) {
 
 	_, err := c.Classify(context.Background(), "Severance.S02E01.1080p")
 	require.Error(t, err)
+}
+
+// TestClassify_LogsAnthropicUsage asserts the SDK round-trip emits a single
+// structured "anthropic_call" log line with model + token counts so the
+// operator can audit spend per call.
+func TestClassify_LogsAnthropicUsage(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(okResponse(`{\"show\": \"x\", \"season\": 1}`)))
+	}))
+	_, err := c.Classify(context.Background(), "X.S01E01.1080p")
+	require.NoError(t, err)
+
+	var found map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var ev map[string]any
+		if json.Unmarshal([]byte(line), &ev) == nil && ev["msg"] == "anthropic_call" {
+			found = ev
+			break
+		}
+	}
+	require.NotNil(t, found, "expected an anthropic_call log line")
+	assert.Equal(t, "classify", found["call"])
+	assert.Equal(t, float64(50), found["input_tokens"])
+	assert.Equal(t, float64(15), found["output_tokens"])
+	assert.NotEmpty(t, found["model"])
 }
 
 func TestClassify_EmptyResult(t *testing.T) {

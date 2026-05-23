@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 )
@@ -160,6 +161,7 @@ func (c *Client) PickDir(ctx context.Context, title string, existingDirs []strin
 		sb.WriteString("\n")
 	}
 
+	start := time.Now()
 	resp, err := c.inner.Messages.New(ctx, anthropic.MessageNewParams{
 		// Opus 4.7: sonnet 4.6 stumbled on season-pack layouts — when the
 		// torrent itself already lays out SeasonN/ subdirs, sonnet still
@@ -182,6 +184,7 @@ func (c *Client) PickDir(ctx context.Context, title string, existingDirs []strin
 	if err != nil {
 		return PickDirResult{}, fmt.Errorf("aiclassify pickdir: api call: %w", err)
 	}
+	logUsage("pickdir", string(anthropic.ModelClaudeOpus4_7), start, resp.Usage)
 
 	for _, block := range resp.Content {
 		if block.Type != "text" {

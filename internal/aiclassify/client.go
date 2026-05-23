@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -57,6 +59,7 @@ var outputSchema = map[string]any{
 // and season number. show is returned lowercase + dot-separated.
 // 30s timeout via the passed context.
 func (c *Client) Classify(ctx context.Context, title string) (Result, error) {
+	start := time.Now()
 	resp, err := c.inner.Messages.New(ctx, anthropic.MessageNewParams{
 		Model:     anthropic.ModelClaudeOpus4_7,
 		MaxTokens: 200,
@@ -75,6 +78,7 @@ func (c *Client) Classify(ctx context.Context, title string) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("aiclassify: api call: %w", err)
 	}
+	logUsage("classify", string(anthropic.ModelClaudeOpus4_7), start, resp.Usage)
 
 	for _, block := range resp.Content {
 		if block.Type == "text" {
@@ -86,4 +90,19 @@ func (c *Client) Classify(ctx context.Context, title string) (Result, error) {
 		}
 	}
 	return Result{}, fmt.Errorf("aiclassify: no text block in response")
+}
+
+// logUsage emits one structured log line per anthropic API round-trip with
+// model + latency + token usage. Pricing isn't in the response; callers can
+// cross-reference model+token counts against the anthropic pricing page.
+func logUsage(call, model string, start time.Time, u anthropic.Usage) {
+	slog.Info("anthropic_call",
+		"call", call,
+		"model", model,
+		"latency_ms", time.Since(start).Milliseconds(),
+		"input_tokens", u.InputTokens,
+		"output_tokens", u.OutputTokens,
+		"cache_creation_tokens", u.CacheCreationInputTokens,
+		"cache_read_tokens", u.CacheReadInputTokens,
+		"service_tier", string(u.ServiceTier))
 }
