@@ -1,13 +1,22 @@
 package main
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/anacrolix/torrent/bencode"
+	"github.com/anacrolix/torrent/metainfo"
 	"github.com/atomicstack/torrent-manager/internal/api"
+	"github.com/atomicstack/torrent-manager/internal/feed"
+	"github.com/atomicstack/torrent-manager/internal/savedir"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -15,11 +24,13 @@ import (
 // muxFor builds a test mux against the given seedctl base url + http client.
 // Centralised so we don't repeat the renderer + feeds plumbing in every
 // test. Feeds defaults to nil — tests that exercise the dropdown override.
+// Shows + roots + cookieEnvs default to zero values; tests that exercise
+// the enqueue flow build their own mux via muxForEnqueue.
 func muxFor(t *testing.T, base string, hc *http.Client, feeds []string) http.Handler {
 	t.Helper()
 	r, err := newRenderer()
 	require.NoError(t, err)
-	return newMux(NewSeedctl(base, hc), feeds, r)
+	return newMux(NewSeedctl(base, hc), feeds, nil, savedir.Roots{}, nil, r)
 }
 
 // TestHealthz_SeedctlUp spins up an httptest server impersonating a healthy
@@ -166,4 +177,218 @@ func TestStatic_ServesCSS(t *testing.T) {
 	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/static/app.css", nil))
 	require.Equal(t, http.StatusOK, rr.Code)
 	assert.Contains(t, rr.Body.String(), ":root")
+}
+
+// fooRule returns a canonical "foo" tv rule used by the enqueue tests below.
+// Centralised so the matcher and the expected save_dir computation agree.
+func fooRule() feed.ShowRule {
+	return feed.ShowRule{
+		Name:      "foo",
+		Category:  "tv",
+		Directory: "foo",
+		Regex:     regexp.MustCompile(`(?i)foo\.s\d+e\d+`),
+	}
+}
+
+// sha1Upper returns the uppercase hex sha1 of b. Used to assert the info
+// hash that tmweb forwards to seedctl matches the info dict bytes.
+func sha1Upper(b []byte) string {
+	s := sha1.Sum(b)
+	return strings.ToUpper(hex.EncodeToString(s[:]))
+}
+
+// TestEnqueueConfirm_RenderModal exercises the happy-path: lookup the item
+// by feed+guid, re-derive the save_dir from the watchlist rule, and render
+// the modal fragment with all the expected bits in place.
+func TestEnqueueConfirm_RenderModal(t *testing.T) {
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/items" {
+			_ = json.NewEncoder(w).Encode(api.ItemsListResponse{Items: []api.ItemRecord{
+				{
+					FeedName:    "TrackerA (TV)",
+					GUID:        "g1",
+					Title:       "Foo.S01E01.1080p",
+					MatchedRule: "foo",
+					LastSeenAt:  time.Now().Unix(),
+				},
+			}})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(stub.Close)
+
+	r, err := newRenderer()
+	require.NoError(t, err)
+	mux := newMux(NewSeedctl(stub.URL, stub.Client()),
+		[]string{"TrackerA (TV)"},
+		[]feed.ShowRule{fooRule()},
+		savedir.Roots{TV: "/t/tv"},
+		nil,
+		r,
+	)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet,
+		"/api/enqueue-confirm?feed=TrackerA%20(TV)&guid=g1", nil))
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := rr.Body.String()
+	assert.Contains(t, body, "Foo.S01E01.1080p", "modal shows the item title")
+	assert.Contains(t, body, "/t/tv/foo/season1", "save_dir derived correctly")
+	assert.Contains(t, body, `hx-post="/api/enqueue`, "confirm button POSTs back to /api/enqueue")
+}
+
+// TestEnqueueConfirm_NoRule covers the case where the item has no matched
+// rule (phase 3 will fill this with a manual flow). The button on the row
+// is disabled but if someone forces the request directly we still render a
+// useful modal — not silently dismiss.
+func TestEnqueueConfirm_NoRule(t *testing.T) {
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(api.ItemsListResponse{Items: []api.ItemRecord{
+			{FeedName: "TrackerA (TV)", GUID: "g1", Title: "Random.Release.1080p", LastSeenAt: time.Now().Unix()},
+		}})
+	}))
+	t.Cleanup(stub.Close)
+
+	r, err := newRenderer()
+	require.NoError(t, err)
+	mux := newMux(NewSeedctl(stub.URL, stub.Client()),
+		[]string{"TrackerA (TV)"}, []feed.ShowRule{fooRule()},
+		savedir.Roots{TV: "/t/tv"}, nil, r)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet,
+		"/api/enqueue-confirm?feed=TrackerA%20(TV)&guid=g1", nil))
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := rr.Body.String()
+	assert.Contains(t, body, "no rule")
+	assert.Contains(t, body, "phase 3")
+}
+
+// TestEnqueueDo_PostsToSeedctlAndRendersTable is the full happy-path
+// integration. It stubs:
+//  1. a tracker that serves a minimal bencoded .torrent,
+//  2. a seedctl that records the headers + body posted to /v1/torrents
+//     and replies with the list-items lookup on /v1/items.
+//
+// Then it POSTs /api/enqueue and asserts:
+//   - the correct info hash header was forwarded,
+//   - the correct save_dir header was forwarded,
+//   - the raw .torrent bytes were forwarded verbatim,
+//   - the response body is a fresh table-rows fragment (re-rendered).
+func TestEnqueueDo_PostsToSeedctlAndRendersTable(t *testing.T) {
+	// Build the .torrent first so we know the hash to assert.
+	info := metainfo.Info{
+		PieceLength: 16384,
+		Pieces:      make([]byte, 20),
+		Name:        "foo.mkv",
+		Length:      1,
+	}
+	infoBytes, err := bencode.Marshal(info)
+	require.NoError(t, err)
+	mi := metainfo.MetaInfo{InfoBytes: infoBytes}
+	torrentBytes, err := bencode.Marshal(mi)
+	require.NoError(t, err)
+	expectedHash := sha1Upper(infoBytes)
+
+	// Tracker stub: serves the .torrent on any path.
+	tracker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(torrentBytes)
+	}))
+	t.Cleanup(tracker.Close)
+
+	// Seedctl stub: serves the items lookup with Link pointing at our
+	// tracker, and records the headers + body it receives on /v1/torrents.
+	var seedctlPosted struct {
+		hash    string
+		saveDir string
+		body    []byte
+	}
+	seedctl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/items":
+			_ = json.NewEncoder(w).Encode(api.ItemsListResponse{Items: []api.ItemRecord{
+				{
+					FeedName:    "TrackerA (TV)",
+					GUID:        "g1",
+					Title:       "Foo.S01E01.1080p",
+					MatchedRule: "foo",
+					Link:        tracker.URL + "/.torrent",
+					LastSeenAt:  time.Now().Unix(),
+				},
+			}})
+		case "/v1/torrents":
+			seedctlPosted.hash = r.Header.Get("X-Info-Hash")
+			seedctlPosted.saveDir = r.Header.Get("X-Save-Directory")
+			seedctlPosted.body, _ = io.ReadAll(r.Body)
+			_ = json.NewEncoder(w).Encode(api.AddTorrentResponse{
+				InfoHash: seedctlPosted.hash,
+				Added:    true,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(seedctl.Close)
+
+	r, err := newRenderer()
+	require.NoError(t, err)
+	mux := newMux(NewSeedctl(seedctl.URL, seedctl.Client()),
+		[]string{"TrackerA (TV)"},
+		[]feed.ShowRule{fooRule()},
+		savedir.Roots{TV: "/t/tv"},
+		nil,
+		r,
+	)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodPost,
+		"/api/enqueue?feed=TrackerA%20(TV)&guid=g1", nil))
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	assert.Equal(t, expectedHash, seedctlPosted.hash, "info hash forwarded to seedctl")
+	assert.Equal(t, "/t/tv/foo/season1", seedctlPosted.saveDir, "save_dir derived correctly")
+	assert.Equal(t, torrentBytes, seedctlPosted.body, "raw .torrent bytes forwarded")
+
+	// The response body is a re-rendered table-rows fragment.
+	assert.Contains(t, rr.Body.String(), "Foo.S01E01.1080p")
+}
+
+// TestEnqueueDo_TrackerFailureRendersErrorRow ensures that if fetching the
+// .torrent fails (e.g. cookie missing / 403), we surface the error as a
+// table-rows fragment so the user sees the cause inline instead of a
+// silent no-op.
+func TestEnqueueDo_TrackerFailureRendersErrorRow(t *testing.T) {
+	tracker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+	}))
+	t.Cleanup(tracker.Close)
+
+	seedctl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/items" {
+			_ = json.NewEncoder(w).Encode(api.ItemsListResponse{Items: []api.ItemRecord{
+				{
+					FeedName:    "TrackerA (TV)",
+					GUID:        "g1",
+					Title:       "Foo.S01E01.1080p",
+					MatchedRule: "foo",
+					Link:        tracker.URL + "/.torrent",
+					LastSeenAt:  time.Now().Unix(),
+				},
+			}})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(seedctl.Close)
+
+	r, err := newRenderer()
+	require.NoError(t, err)
+	mux := newMux(NewSeedctl(seedctl.URL, seedctl.Client()),
+		[]string{"TrackerA (TV)"}, []feed.ShowRule{fooRule()},
+		savedir.Roots{TV: "/t/tv"}, nil, r)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodPost,
+		"/api/enqueue?feed=TrackerA%20(TV)&guid=g1", nil))
+	require.Equal(t, http.StatusOK, rr.Code)
+	body := rr.Body.String()
+	assert.Contains(t, body, "enqueue failed")
+	assert.Contains(t, body, "status 403")
 }

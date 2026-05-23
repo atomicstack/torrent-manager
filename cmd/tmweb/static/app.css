@@ -130,6 +130,77 @@ th, td {
   padding: 2rem;
 }
 
+/* modal overlay used by the enqueue-confirm flow */
+.modal-bg {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  padding: 1rem;
+}
+
+.modal-card {
+  background: var(--bg);
+  color: var(--fg);
+  border-radius: 6px;
+  padding: 1.25rem;
+  max-width: 36rem;
+  width: 100%;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+}
+
+.modal-card h2 {
+  margin: 0 0 0.5rem 0;
+  font-size: 1.1rem;
+}
+
+.modal-card dl {
+  display: grid;
+  grid-template-columns: 6rem 1fr;
+  gap: 0.25rem 1rem;
+  margin: 0.75rem 0;
+}
+
+.modal-card dt {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.modal-card dd {
+  margin: 0;
+  word-break: break-all;
+}
+
+.modal-card .mono {
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 1rem;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+.btn-cancel {
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+
 /* mobile card layout */
 @media (max-width: 600px) {
   table, thead, tbody, tr, td, th { display: block; }

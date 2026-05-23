@@ -12,7 +12,15 @@
     {{end}}
   </td>
   <td class="cell-action">
-    <button class="btn-enqueue" disabled title="phase 3 will wire this">enqueue</button>
+    {{- if .Enqueued -}}
+    <button class="btn-enqueue" disabled title="already enqueued">enqueued</button>
+    {{- else if .MatchedRule -}}
+    <button class="btn-enqueue"
+            hx-get="/api/enqueue-confirm?feed={{.FeedName | urlquery}}&guid={{.GUID | urlquery}}"
+            hx-target="#modal" hx-swap="innerHTML">enqueue</button>
+    {{- else -}}
+    <button class="btn-enqueue" disabled title="no watchlist rule matches">enqueue</button>
+    {{- end -}}
   </td>
 </tr>
 {{end}}

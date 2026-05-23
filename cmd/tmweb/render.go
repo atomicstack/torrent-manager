@@ -27,12 +27,14 @@ var funcMap = template.FuncMap{
 	"ago": humanAgo,
 }
 
-// renderer holds the two parsed templates tmweb serves. layout is the full
+// renderer holds the parsed templates tmweb serves. layout is the full
 // page shell rendered for GET /; rows is the table-rows fragment swapped in
-// by htmx after each search.
+// by htmx after each search; confirm is the modal fragment swapped into the
+// #modal portal div by the enqueue-confirm flow.
 type renderer struct {
-	layout *template.Template
-	rows   *template.Template
+	layout  *template.Template
+	rows    *template.Template
+	confirm *template.Template
 }
 
 // newRenderer parses the embedded templates and returns a ready-to-execute
@@ -47,7 +49,11 @@ func newRenderer() (*renderer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse rows: %w", err)
 	}
-	return &renderer{layout: layout, rows: rows}, nil
+	confirm, err := template.New("_confirm.html").Funcs(funcMap).ParseFS(templatesFS, "templates/_confirm.html")
+	if err != nil {
+		return nil, fmt.Errorf("parse confirm: %w", err)
+	}
+	return &renderer{layout: layout, rows: rows, confirm: confirm}, nil
 }
 
 // humanAgo returns a coarse human-readable relative time given a unix-seconds
