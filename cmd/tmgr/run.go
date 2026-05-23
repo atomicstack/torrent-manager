@@ -206,7 +206,7 @@ func Run(ctx context.Context, cfg Config, hc *http.Client) (RunResult, error) {
 			slog.Info("item_matched",
 				"feed", feedLabel, "title", it.Title,
 				"rule", rule.Name, "hash_from_feed", hashFromFeed)
-			if err := processItem(ctx, cfg, hc, f.Cookie, it, rule, &r); err != nil {
+			if err := processItem(ctx, cfg, hc, feedLabel, f.Cookie, it, rule, &r); err != nil {
 				slog.Error("process_item", "title", it.Title, "err", err)
 				r.Errors++
 			}
@@ -260,7 +260,7 @@ func bootstrapFromExport(ctx context.Context, hc *http.Client, base string) ([]h
 	return out, nil
 }
 
-func processItem(ctx context.Context, cfg Config, hc *http.Client, feedCookie string, it feed.Item, rule feed.ShowRule, r *RunResult) error {
+func processItem(ctx context.Context, cfg Config, hc *http.Client, feedLabel, feedCookie string, it feed.Item, rule feed.ShowRule, r *RunResult) error {
 	mode := cfg.effectiveMode()
 
 	hash, hashFromFeed := feed.ExtractHash(it)
@@ -379,6 +379,14 @@ func processItem(ctx context.Context, cfg Config, hc *http.Client, feedCookie st
 	r.Added++
 	if cerr := cfg.Cache.Add(hash, it.Title); cerr != nil {
 		slog.Warn("cache_add_failed", "hash", hash, "err", cerr)
+	}
+	// best-effort: record the parsed-torrent meta on the items row so tmweb
+	// can ship size/contents inline at page load. seedctl already has the
+	// row from the rss upsert tick.
+	if md, perr := torrent.Parse(torrentBytes); perr == nil {
+		if merr := postItemMeta(ctx, hc, cfg.SeedctlURL, feedLabel, it.GUID, md.TotalBytes, md.FileCount, md.DirCount()); merr != nil {
+			slog.Warn("post_item_meta_failed", "title", it.Title, "hash", hash, "err", merr)
+		}
 	}
 	slog.Info("added", "title", it.Title, "hash", hash, "rule", rule.Name, "save_dir", saveDir)
 	return nil
@@ -507,6 +515,32 @@ func postItems(ctx context.Context, hc *http.Client, base string, items []api.It
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// postItemMeta records the parsed-torrent meta on the seedctl items row so
+// the tmweb ui ships it inline on page load. Best-effort: callers log the
+// error and continue, since the actual enqueue has already succeeded.
+func postItemMeta(ctx context.Context, hc *http.Client, base, feed, guid string, totalBytes int64, fileCount, dirCount int) error {
+	body, err := json.Marshal(api.ItemMetaRequest{
+		FeedName: feed, GUID: guid,
+		TotalBytes: totalBytes, FileCount: fileCount, DirCount: dirCount,
+	})
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "POST", base+"/v1/items/meta", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := hc.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("status %d", resp.StatusCode)
 	}
 	return nil

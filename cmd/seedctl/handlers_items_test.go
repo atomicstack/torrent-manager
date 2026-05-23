@@ -97,6 +97,38 @@ func TestPostTorrent_RecordsEnqueue(t *testing.T) {
 	assert.Equal(t, itemsdb.SourceAuto, rows[0].EnqueueSource)
 }
 
+func TestSetItemMeta_PersistsAndAppearsInList(t *testing.T) {
+	h, db := newTestItemsHandler(t)
+	now := time.Now()
+	require.NoError(t, db.Upsert(context.Background(), []itemsdb.Item{
+		{FeedName: "f", GUID: "g1", Title: "x", FirstSeenAt: now, LastSeenAt: now},
+	}))
+	body, _ := json.Marshal(api.ItemMetaRequest{
+		FeedName: "f", GUID: "g1",
+		TotalBytes: 1_610_612_736, FileCount: 12, DirCount: 3,
+	})
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest("POST", "/v1/items/meta", bytes.NewReader(body)))
+	require.Equal(t, http.StatusNoContent, rr.Code)
+
+	rr2 := httptest.NewRecorder()
+	h.ServeHTTP(rr2, httptest.NewRequest("GET", "/v1/items?include_enqueued=1", nil))
+	require.Equal(t, http.StatusOK, rr2.Code)
+	var resp api.ItemsListResponse
+	require.NoError(t, json.NewDecoder(rr2.Body).Decode(&resp))
+	require.Len(t, resp.Items, 1)
+	assert.Equal(t, int64(1_610_612_736), resp.Items[0].TotalBytes)
+	assert.Equal(t, 12, resp.Items[0].FileCount)
+	assert.Equal(t, 3, resp.Items[0].DirCount)
+}
+
+func TestSetItemMeta_BadJSON(t *testing.T) {
+	h, _ := newTestItemsHandler(t)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest("POST", "/v1/items/meta", strings.NewReader("not json")))
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
 func TestExportItems_ReturnsAll(t *testing.T) {
 	h, db := newTestItemsHandler(t)
 	now := time.Now()

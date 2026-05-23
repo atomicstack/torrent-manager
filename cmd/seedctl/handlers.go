@@ -48,6 +48,7 @@ func newHandler(c rtorrentClient, items *itemsdb.DB, restartCh chan<- struct{}, 
 	mux.HandleFunc("GET /v1/torrents/{hash}", h.getTorrent)
 	mux.HandleFunc("POST /v1/torrents", h.postTorrent)
 	mux.HandleFunc("POST /v1/items", h.upsertItems)
+	mux.HandleFunc("POST /v1/items/meta", h.setItemMeta)
 	mux.HandleFunc("GET /v1/items", h.listItems)
 	mux.HandleFunc("GET /v1/items/export", h.exportItems)
 	mux.HandleFunc("GET /v1/dirs", h.listDirs)
@@ -243,9 +244,35 @@ func itemRowsToRecords(in []itemsdb.Item) []api.ItemRecord {
 			LastSeenAt:    it.LastSeenAt.Unix(),
 			Enqueued:      it.Enqueued,
 			EnqueueSource: string(it.EnqueueSource),
+			TotalBytes:    it.TotalBytes,
+			FileCount:     it.FileCount,
+			DirCount:      it.DirCount,
 		})
 	}
 	return out
+}
+
+// setItemMeta records the parsed-torrent meta for one item. Used by tmgr
+// (auto-enqueue) and tmweb (manual enqueue / classify) so the next List
+// returns the meta inline. No-op on the db side if the row hasn't been
+// upserted yet — best-effort, never fail the caller.
+func (h *handler) setItemMeta(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<10)
+	var req api.ItemMetaRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	if req.FeedName == "" || req.GUID == "" {
+		http.Error(w, "feed_name and guid required", http.StatusBadRequest)
+		return
+	}
+	if err := h.items.SetMeta(r.Context(), req.FeedName, req.GUID, req.TotalBytes, req.FileCount, req.DirCount); err != nil {
+		slog.Error("set item meta", "feed", req.FeedName, "guid", req.GUID, "err", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // adminRestart signals the main loop to gracefully shut down and re-exec the

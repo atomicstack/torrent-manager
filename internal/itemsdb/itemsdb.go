@@ -33,6 +33,14 @@ type Item struct {
 	LastSeenAt    time.Time
 	Enqueued      bool   // populated by List; true if there's a matching row in enqueues
 	EnqueueSource Source // SourceAuto | SourceManual | '' when Enqueued = false
+
+	// Meta fields are 0 when no .torrent has been fetched + parsed for this
+	// item yet. Populated by SetMeta from tmgr (auto-enqueue) or tmweb
+	// (manual enqueue / ✨ classify). TotalBytes > 0 is the "have meta"
+	// signal; FileCount/DirCount can both be 0 on a single-file torrent.
+	TotalBytes int64
+	FileCount  int
+	DirCount   int
 }
 
 // Source identifies which code path recorded an enqueue. The empty value is
@@ -116,6 +124,26 @@ func runMigrations(sdb *sql.DB) error {
 			return fmt.Errorf("drop enclosure column: %w", err)
 		}
 	}
+	// Add the meta columns to pre-existing databases. The schemaSQL above
+	// covers fresh installs; this loop catches dbs created before meta
+	// caching landed.
+	for _, col := range []struct{ name, sqlType string }{
+		{"total_bytes", "INTEGER"},
+		{"file_count", "INTEGER"},
+		{"dir_count", "INTEGER"},
+	} {
+		var n int
+		if err := sdb.QueryRow(
+			`SELECT COUNT(*) FROM pragma_table_info('items') WHERE name = ?`, col.name,
+		).Scan(&n); err != nil {
+			return fmt.Errorf("probe %s column: %w", col.name, err)
+		}
+		if n == 0 {
+			if _, err := sdb.Exec(fmt.Sprintf(`ALTER TABLE items ADD COLUMN %s %s`, col.name, col.sqlType)); err != nil {
+				return fmt.Errorf("add %s column: %w", col.name, err)
+			}
+		}
+	}
 	return nil
 }
 
@@ -133,6 +161,9 @@ CREATE TABLE IF NOT EXISTS items (
   matched_rule   TEXT,
   first_seen_at  INTEGER NOT NULL,
   last_seen_at   INTEGER NOT NULL,
+  total_bytes    INTEGER,
+  file_count     INTEGER,
+  dir_count      INTEGER,
   UNIQUE(feed_name, guid)
 );
 CREATE INDEX IF NOT EXISTS items_hash     ON items(info_hash);
@@ -253,6 +284,7 @@ SELECT i.id, i.feed_name, i.guid, i.title,
        COALESCE(i.link, ''),
        COALESCE(i.info_hash, ''), COALESCE(i.matched_rule, ''),
        i.first_seen_at, i.last_seen_at,
+       COALESCE(i.total_bytes, 0), COALESCE(i.file_count, 0), COALESCE(i.dir_count, 0),
        CASE WHEN i.info_hash IS NOT NULL AND EXISTS (SELECT 1 FROM enqueues e WHERE e.info_hash = i.info_hash) THEN 1 ELSE 0 END AS enqueued,
        COALESCE((SELECT source FROM enqueues e WHERE e.info_hash = i.info_hash), '') AS enq_source
 FROM items i %s %s ORDER BY %s LIMIT ? OFFSET ?
@@ -271,7 +303,9 @@ FROM items i %s %s ORDER BY %s LIMIT ? OFFSET ?
 		if err := rows.Scan(&it.ID, &it.FeedName, &it.GUID, &it.Title,
 			&it.Link,
 			&it.InfoHash, &it.MatchedRule,
-			&first, &last, &enqueued, &it.EnqueueSource); err != nil {
+			&first, &last,
+			&it.TotalBytes, &it.FileCount, &it.DirCount,
+			&enqueued, &it.EnqueueSource); err != nil {
 			return nil, err
 		}
 		it.FirstSeenAt = time.Unix(first, 0)
@@ -280,6 +314,19 @@ FROM items i %s %s ORDER BY %s LIMIT ? OFFSET ?
 		out = append(out, it)
 	}
 	return out, rows.Err()
+}
+
+// SetMeta records the parsed-torrent meta for one (feed, guid). Called
+// after tmgr or tmweb fetches + parses a .torrent so the next List call
+// returns the meta inline (and tmweb can ship it to the browser at page
+// load). No-op when the row doesn't exist yet — callers rely on the
+// RSS-side Upsert to land the row first.
+func (d *DB) SetMeta(ctx context.Context, feedName, guid string, totalBytes int64, fileCount, dirCount int) error {
+	_, err := d.db.ExecContext(ctx, `
+UPDATE items SET total_bytes = ?, file_count = ?, dir_count = ?
+WHERE feed_name = ? AND guid = ?
+`, totalBytes, fileCount, dirCount, feedName, guid)
+	return err
 }
 
 // Export dumps every row (used for tmgr bootstrap when its local mirror is empty).

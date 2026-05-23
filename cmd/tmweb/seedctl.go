@@ -169,6 +169,37 @@ func (s *Seedctl) ListDirs(ctx context.Context, rootName string) (api.DirsListRe
 	return out, nil
 }
 
+// SetItemMeta records the parsed-torrent meta for one (feed, guid). Used
+// by the ✨ classify and manual-enqueue paths after a fetch + parse, so
+// the next page load ships the meta inline to the browser. Best-effort —
+// callers log and continue on error rather than failing the user-visible
+// enqueue.
+func (s *Seedctl) SetItemMeta(ctx context.Context, feed, guid string, totalBytes int64, fileCount, dirCount int) error {
+	u := s.base + "/v1/items/meta"
+	body, err := json.Marshal(api.ItemMetaRequest{
+		FeedName: feed, GUID: guid,
+		TotalBytes: totalBytes, FileCount: fileCount, DirCount: dirCount,
+	})
+	if err != nil {
+		return fmt.Errorf("seedctl POST %s: marshal: %w", u, err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("seedctl POST %s: build request: %w", u, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := s.hc.Do(req)
+	if err != nil {
+		return fmt.Errorf("seedctl POST %s: %w", u, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return fmt.Errorf("seedctl POST %s: status %d", u, resp.StatusCode)
+	}
+	return nil
+}
+
 // PostTorrent uploads a .torrent body to POST /v1/torrents. The body is sent
 // as-is (no gzip): .torrent files are already binary/opaque-to-deflate, so
 // compression would inflate rather than shrink. The info hash and save dir

@@ -47,6 +47,22 @@ type ItemRecord struct {
 	LastSeenAt    int64  `json:"last_seen_at"`
 	Enqueued      bool   `json:"enqueued,omitempty"`
 	EnqueueSource string `json:"enqueue_source,omitempty"` // 'auto' | 'manual' | ''
+	// Meta fields are 0 until something has fetched + parsed the .torrent
+	// and called /v1/items/meta. TotalBytes > 0 is the "have meta" signal;
+	// FileCount/DirCount can both be 0 on a single-file torrent.
+	TotalBytes int64 `json:"total_bytes,omitempty"`
+	FileCount  int   `json:"file_count,omitempty"`
+	DirCount   int   `json:"dir_count,omitempty"`
+}
+
+// ItemMetaRequest is POST /v1/items/meta's body — the parsed-torrent meta
+// for one (feed, guid) tuple, recorded after a fetch + parse.
+type ItemMetaRequest struct {
+	FeedName   string `json:"feed_name"`
+	GUID       string `json:"guid"`
+	TotalBytes int64  `json:"total_bytes"`
+	FileCount  int    `json:"file_count"`
+	DirCount   int    `json:"dir_count"`
 }
 
 // ItemsUpsertRequest is POST /v1/items's body — a batch of items to insert/update.

@@ -34,7 +34,7 @@ func TestRenderRows_EmptyShowsPlaceholder(t *testing.T) {
 	r, err := newRenderer()
 	require.NoError(t, err)
 	var buf bytes.Buffer
-	require.NoError(t, r.rows.Execute(&buf, api.ItemsListResponse{}))
+	require.NoError(t, r.rows.Execute(&buf, rowsTemplateData{}))
 	assert.Contains(t, buf.String(), "no matches")
 }
 
@@ -44,7 +44,7 @@ func TestRenderRows_EnqueuedItemHasBadge(t *testing.T) {
 	r, err := newRenderer()
 	require.NoError(t, err)
 	var buf bytes.Buffer
-	require.NoError(t, r.rows.Execute(&buf, api.ItemsListResponse{Items: []api.ItemRecord{
+	require.NoError(t, r.rows.Execute(&buf, rowsTemplateData{Items: []api.ItemRecord{
 		{FeedName: "TrackerA (TV)", Title: "Foo S01E01", InfoHash: "DEADBEEF", Enqueued: true, EnqueueSource: "auto", FirstSeenAt: time.Now().Unix(), LastSeenAt: time.Now().Unix()},
 	}}))
 	body := buf.String()
@@ -59,12 +59,39 @@ func TestRenderRows_NotEnqueuedHasNoBadge(t *testing.T) {
 	r, err := newRenderer()
 	require.NoError(t, err)
 	var buf bytes.Buffer
-	require.NoError(t, r.rows.Execute(&buf, api.ItemsListResponse{Items: []api.ItemRecord{
+	require.NoError(t, r.rows.Execute(&buf, rowsTemplateData{Items: []api.ItemRecord{
 		{FeedName: "TrackerA (TV)", Title: "Bar S01E01", FirstSeenAt: time.Now().Unix(), LastSeenAt: time.Now().Unix()},
 	}}))
 	body := buf.String()
 	assert.Contains(t, body, "Bar S01E01")
 	assert.NotContains(t, body, "badge")
+}
+
+// TestRenderRows_EmbedsCachedMetaScript verifies the rows fragment carries
+// a <script>window.cachedMeta = ...</script> block populated from items
+// with TotalBytes > 0, so the client has size + contents without an extra
+// server round-trip.
+func TestRenderRows_EmbedsCachedMetaScript(t *testing.T) {
+	r, err := newRenderer()
+	require.NoError(t, err)
+	var buf bytes.Buffer
+	require.NoError(t, r.rows.Execute(&buf, rowsTemplateData{
+		Items: []api.ItemRecord{
+			{FeedName: "TrackerA (TV)", GUID: "g1", Title: "Foo S01E01", TotalBytes: 1_610_612_736, FileCount: 12, DirCount: 3, FirstSeenAt: time.Now().Unix(), LastSeenAt: time.Now().Unix()},
+			{FeedName: "TrackerA (TV)", GUID: "g2", Title: "Bar S01E01", FirstSeenAt: time.Now().Unix(), LastSeenAt: time.Now().Unix()},
+		},
+		MetaMap: metaMapJSON([]api.ItemRecord{
+			{FeedName: "TrackerA (TV)", GUID: "g1", TotalBytes: 1_610_612_736, FileCount: 12, DirCount: 3},
+			{FeedName: "TrackerA (TV)", GUID: "g2"},
+		}),
+	}))
+	body := buf.String()
+	assert.Contains(t, body, "window.cachedMeta", "script must populate window.cachedMeta")
+	assert.Contains(t, body, `"TrackerA (TV)|g1"`, "item with meta keys into the map by feed|guid")
+	assert.Contains(t, body, `"bytes":1610612736`, "byte count emitted as a json number")
+	assert.Contains(t, body, `"file_count":12`)
+	assert.Contains(t, body, `"dir_count":3`)
+	assert.NotContains(t, body, `"TrackerA (TV)|g2"`, "items without meta (TotalBytes==0) are omitted")
 }
 
 // TestHumanAgo_RelativeBuckets sanity-checks the coarse relative-time
@@ -95,7 +122,7 @@ func TestRenderRows_FirstSeenHasISOTooltip(t *testing.T) {
 	r, err := newRenderer()
 	require.NoError(t, err)
 	var buf bytes.Buffer
-	require.NoError(t, r.rows.Execute(&buf, api.ItemsListResponse{Items: []api.ItemRecord{
+	require.NoError(t, r.rows.Execute(&buf, rowsTemplateData{Items: []api.ItemRecord{
 		{FeedName: "TrackerA (TV)", Title: "Foo S01E01", FirstSeenAt: 1779424512, LastSeenAt: 1779424512},
 	}}))
 	body := buf.String()

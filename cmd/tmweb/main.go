@@ -351,10 +351,44 @@ func (h *handler) renderRows(w http.ResponseWriter, ctx context.Context, q Items
 		fmt.Fprintf(w, `<tr><td colspan="4" class="empty">error: %s</td></tr>`, html.EscapeString(err.Error()))
 		return
 	}
-	if err := h.r.rows.Execute(w, items); err != nil {
+	if err := h.r.rows.Execute(w, rowsTemplateData{
+		Items:   items.Items,
+		MetaMap: metaMapJSON(items.Items),
+	}); err != nil {
 		slog.Error("render_rows", "err", err)
 		http.Error(w, "render", http.StatusInternalServerError)
 	}
+}
+
+// rowsTemplateData carries both the rows and a JSON object literal of
+// per-item meta (only items with TotalBytes > 0). The script tag at the
+// bottom of _rows.html merges this into window.cachedMeta so the client
+// has size + contents available without re-querying the server.
+type rowsTemplateData struct {
+	Items   []api.ItemRecord
+	MetaMap template.JS
+}
+
+// metaMapJSON encodes a {"feed|guid": {bytes,file_count,dir_count}} map
+// as a JSON literal safe to drop into a <script> body. Items without meta
+// (TotalBytes == 0) are omitted. Returns "{}" when no item carries meta.
+func metaMapJSON(items []api.ItemRecord) template.JS {
+	out := make(map[string]map[string]int64, len(items))
+	for _, it := range items {
+		if it.TotalBytes <= 0 {
+			continue
+		}
+		out[it.FeedName+"|"+it.GUID] = map[string]int64{
+			"bytes":      it.TotalBytes,
+			"file_count": int64(it.FileCount),
+			"dir_count":  int64(it.DirCount),
+		}
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return template.JS("{}")
+	}
+	return template.JS(b)
 }
 
 // enqueueConfirm renders the modal fragment for the enqueue flow. Branches
@@ -415,12 +449,12 @@ func (h *handler) confirmRuleMatched(w http.ResponseWriter, ctx context.Context,
 		CommonRoot:  h.commonRoot,
 		Completions: h.collectCompletions(ctx),
 	}
-	// cache hit (e.g. user opened a no-rule classify earlier on the same
-	// item, or this is a re-open within the ttl) → surface size + contents
-	// rows immediately instead of waiting for the submit fetch.
-	if e, ok := h.torrents.Get(it.FeedName, it.GUID); ok {
-		data.Meta = toTorrentMeta(e.Meta)
-	}
+	// meta on the seedctl items row is the persistent cache — populated by
+	// tmgr after auto-enqueue + by tmweb after ✨ classify or manual
+	// enqueue. nil here means nothing has parsed this .torrent yet (user
+	// can click ✨ to fetch on demand). avoids any per-modal-open tracker
+	// hit.
+	data.Meta = metaFromItem(it)
 	if err := h.r.confirm.Execute(w, data); err != nil {
 		slog.Error("render_confirm", "err", err)
 	}
@@ -464,30 +498,30 @@ type torrentMeta struct {
 }
 
 // toTorrentMeta builds the modal view from a parsed torrent. Counts unique
-// internal directories from the file paths (joined with "/", relative to
-// info.name) and adds 1 for the wrapper for multi-file torrents.
+// internal directories via Metadata.DirCount (which includes the info.name
+// wrapper for multi-file torrents).
 func toTorrentMeta(m torrent.Metadata) *torrentMeta {
-	out := &torrentMeta{
+	return &torrentMeta{
 		Bytes:      m.TotalBytes,
 		BytesHuman: torrent.HumanBytes(m.TotalBytes),
 		FileCount:  m.FileCount,
+		DirCount:   m.DirCount(),
 	}
-	if !m.SingleFile {
-		out.DirCount = 1 // info.name wrapper
-		seen := make(map[string]bool)
-		for _, f := range m.Files {
-			parts := strings.Split(f.Path, "/")
-			for i := 1; i < len(parts); i++ {
-				d := strings.Join(parts[:i], "/")
-				if d == "" || seen[d] {
-					continue
-				}
-				seen[d] = true
-				out.DirCount++
-			}
-		}
+}
+
+// metaFromItem builds the modal view from the persisted meta on a seedctl
+// item record. Returns nil when the row has no meta yet (TotalBytes == 0),
+// so templates can use {{if .Meta}} to decide whether to render the rows.
+func metaFromItem(it api.ItemRecord) *torrentMeta {
+	if it.TotalBytes <= 0 {
+		return nil
 	}
-	return out
+	return &torrentMeta{
+		Bytes:      it.TotalBytes,
+		BytesHuman: torrent.HumanBytes(it.TotalBytes),
+		FileCount:  it.FileCount,
+		DirCount:   it.DirCount,
+	}
 }
 
 // confirmNoRule renders the _confirm_norule.html modal with a category-
@@ -515,13 +549,9 @@ func (h *handler) confirmNoRule(w http.ResponseWriter, ctx context.Context, it a
 	default:
 		// "other" / unknown: empty field, no icon.
 	}
-	// cache hit → surface size + contents rows on initial modal render
-	// (e.g. user already clicked ✨ for this item earlier within the ttl
-	// and is re-opening). no fetch on modal-open — only show what's
-	// already there.
-	if e, ok := h.torrents.Get(it.FeedName, it.GUID); ok {
-		data.Meta = toTorrentMeta(e.Meta)
-	}
+	// meta on the seedctl items row is the persistent cache — see comment
+	// in confirmRuleMatched for details.
+	data.Meta = metaFromItem(it)
 	if err := h.r.confirmNoRule.Execute(w, data); err != nil {
 		slog.Error("render_confirm_norule", "err", err)
 	}
@@ -616,6 +646,9 @@ func (h *handler) enqueueClassify(w http.ResponseWriter, req *http.Request) {
 		sendStep("caching")
 		entry = &cachedTorrent{Bytes: body, Meta: meta, InfoHash: hash}
 		h.torrents.Put(it.FeedName, it.GUID, entry)
+		if err := h.seedctl.SetItemMeta(req.Context(), it.FeedName, it.GUID, meta.TotalBytes, meta.FileCount, meta.DirCount()); err != nil {
+			slog.Warn("set_item_meta_failed", "feed", it.FeedName, "guid", it.GUID, "err", err)
+		}
 	}
 
 	data.Meta = toTorrentMeta(entry.Meta)
@@ -744,6 +777,12 @@ func (h *handler) ensureTorrentCached(ctx context.Context, it api.ItemRecord) (*
 	}
 	entry := &cachedTorrent{Bytes: body, Meta: meta, InfoHash: hash}
 	h.torrents.Put(it.FeedName, it.GUID, entry)
+	// best-effort: persist the meta on the seedctl items row so subsequent
+	// page loads ship size/contents inline (and any tmgr-side auto-enqueue
+	// for the same item later short-circuits the parse).
+	if err := h.seedctl.SetItemMeta(ctx, it.FeedName, it.GUID, meta.TotalBytes, meta.FileCount, meta.DirCount()); err != nil {
+		slog.Warn("set_item_meta_failed", "feed", it.FeedName, "guid", it.GUID, "err", err)
+	}
 	return entry, nil
 }
 

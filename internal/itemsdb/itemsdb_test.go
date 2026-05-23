@@ -195,6 +195,84 @@ VALUES ('f', 'g1', 't', 'L', 'E', 1, 1)`)
 	assert.Equal(t, "L", got[0].Link)
 }
 
+// TestSetMeta_RoundTripsThroughList confirms SetMeta lands on the row and
+// List returns the values; rows without a SetMeta call default to 0s.
+func TestSetMeta_RoundTripsThroughList(t *testing.T) {
+	db := tmpDB(t)
+	ctx := context.Background()
+	now := time.Unix(1_700_000_000, 0)
+	require.NoError(t, db.Upsert(ctx, []itemsdb.Item{
+		{FeedName: "f", GUID: "g1", Title: "with meta", FirstSeenAt: now, LastSeenAt: now},
+		{FeedName: "f", GUID: "g2", Title: "no meta", FirstSeenAt: now, LastSeenAt: now},
+	}))
+	require.NoError(t, db.SetMeta(ctx, "f", "g1", 1_610_612_736, 12, 3))
+
+	got, err := db.List(ctx, itemsdb.ListQuery{IncludeEnqueued: true, Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	byGUID := map[string]itemsdb.Item{}
+	for _, it := range got {
+		byGUID[it.GUID] = it
+	}
+	assert.Equal(t, int64(1_610_612_736), byGUID["g1"].TotalBytes)
+	assert.Equal(t, 12, byGUID["g1"].FileCount)
+	assert.Equal(t, 3, byGUID["g1"].DirCount)
+	assert.Equal(t, int64(0), byGUID["g2"].TotalBytes, "rows without SetMeta read back as 0 via COALESCE")
+
+	// Upsert must not clobber meta on subsequent ticks (RSS path doesn't
+	// know meta — it leaves the columns alone).
+	require.NoError(t, db.Upsert(ctx, []itemsdb.Item{
+		{FeedName: "f", GUID: "g1", Title: "with meta", FirstSeenAt: now, LastSeenAt: now.Add(time.Minute)},
+	}))
+	got, err = db.List(ctx, itemsdb.ListQuery{IncludeEnqueued: true, Limit: 10})
+	require.NoError(t, err)
+	for _, it := range got {
+		if it.GUID == "g1" {
+			assert.Equal(t, int64(1_610_612_736), it.TotalBytes, "Upsert must preserve total_bytes")
+			assert.Equal(t, 12, it.FileCount, "Upsert must preserve file_count")
+			assert.Equal(t, 3, it.DirCount, "Upsert must preserve dir_count")
+		}
+	}
+}
+
+// TestMigration_AddsMetaColumns seeds a pre-meta schema and confirms Open
+// adds the new columns idempotently. Re-opening must not fail.
+func TestMigration_AddsMetaColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "items.db")
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = raw.Exec(`
+CREATE TABLE items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  feed_name TEXT NOT NULL, guid TEXT NOT NULL,
+  title TEXT NOT NULL, link TEXT,
+  info_hash TEXT, matched_rule TEXT,
+  first_seen_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL,
+  UNIQUE(feed_name, guid)
+);`)
+	require.NoError(t, err)
+	_, err = raw.Exec(`INSERT INTO items (feed_name, guid, title, first_seen_at, last_seen_at)
+VALUES ('f', 'g1', 't', 1, 1)`)
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+
+	db, err := itemsdb.Open(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	require.NoError(t, db.SetMeta(context.Background(), "f", "g1", 100, 2, 1))
+	got, err := db.List(context.Background(), itemsdb.ListQuery{IncludeEnqueued: true, Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, int64(100), got[0].TotalBytes)
+
+	// Reopen — migration must be idempotent.
+	require.NoError(t, db.Close())
+	db2, err := itemsdb.Open(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db2.Close() })
+}
+
 // TestList_OrderMirrorsRSSFeed pins down the new ordering contract: items
 // from later ticks come first (newer first_seen_at), and within a single
 // tick the insertion order (which mirrors the RSS XML order tmgr iterates)

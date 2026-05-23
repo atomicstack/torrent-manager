@@ -66,6 +66,30 @@ func Parse(b []byte) (Metadata, error) {
 	return m, nil
 }
 
+// DirCount returns the count of unique directories the torrent will create
+// on disk, including the info.name wrapper for multi-file torrents.
+// Single-file torrents return 0 — they land as a top-level file with no
+// containing directory.
+func (m Metadata) DirCount() int {
+	if m.SingleFile {
+		return 0
+	}
+	n := 1 // info.name wrapper
+	seen := make(map[string]bool)
+	for _, f := range m.Files {
+		parts := strings.Split(f.Path, "/")
+		for i := 1; i < len(parts); i++ {
+			d := strings.Join(parts[:i], "/")
+			if d == "" || seen[d] {
+				continue
+			}
+			seen[d] = true
+			n++
+		}
+	}
+	return n
+}
+
 // HumanBytes formats a byte count using binary (1024) units.
 func HumanBytes(n int64) string {
 	const unit = 1024
