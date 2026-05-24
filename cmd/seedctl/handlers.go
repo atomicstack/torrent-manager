@@ -159,16 +159,31 @@ func (h *handler) upsertItems(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, api.ItemsUpsertResponse{Upserted: len(rows)})
 }
 
+// parseEnqueuedFilter accepts the wire-side query-param value and returns the
+// matching itemsdb constant. Unknown / empty values fall through to the zero
+// value (FilterUnenqueued) so we never accidentally widen results when the
+// caller sends garbage.
+func parseEnqueuedFilter(s string) itemsdb.EnqueuedFilter {
+	switch s {
+	case string(itemsdb.FilterAll):
+		return itemsdb.FilterAll
+	case string(itemsdb.FilterEnqueued):
+		return itemsdb.FilterEnqueued
+	default:
+		return itemsdb.FilterUnenqueued
+	}
+}
+
 func (h *handler) listItems(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	offset, _ := strconv.Atoi(q.Get("offset"))
 	rows, err := h.items.List(r.Context(), itemsdb.ListQuery{
-		Q:               q.Get("q"),
-		Feed:            q.Get("feed"),
-		IncludeEnqueued: q.Get("include_enqueued") == "1",
-		Limit:           limit,
-		Offset:          offset,
+		Q:              q.Get("q"),
+		Feed:           q.Get("feed"),
+		EnqueuedFilter: parseEnqueuedFilter(q.Get("enqueued_filter")),
+		Limit:          limit,
+		Offset:         offset,
 	})
 	if err != nil {
 		slog.Error("list items", "err", err)

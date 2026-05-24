@@ -28,7 +28,11 @@
         <option value="{{.}}">{{.}}</option>
         {{end}}
       </select>
-      <label><input type="checkbox" name="include_enqueued" value="1" checked> include enqueued</label>
+      <select name="enqueued_filter">
+        <option value="all" selected>all</option>
+        <option value="enqueued">enqueued</option>
+        <option value="">unenqueued</option>
+      </select>
     </form>
   </header>
   <script>
@@ -44,20 +48,21 @@
     var params = new URLSearchParams(location.search);
     if (params.has('q')) form.q.value = params.get('q');
     if (params.has('feed_filter')) form.feed_filter.value = params.get('feed_filter');
-    // include_enqueued: explicit 0/1 in url. absent = keep template default
-    // (checked). this matches the original ui behaviour for a fresh visit.
-    if (params.has('include_enqueued')) {
-      form.include_enqueued.checked = params.get('include_enqueued') !== '0';
+    // enqueued_filter values: "" (unenqueued, server default), "all",
+    // "enqueued". absent from url = keep template-selected option.
+    if (params.has('enqueued_filter')) {
+      form.enqueued_filter.value = params.get('enqueued_filter');
     }
 
     function syncURL() {
       var p = new URLSearchParams();
       if (form.q.value) p.set('q', form.q.value);
       if (form.feed_filter.value) p.set('feed_filter', form.feed_filter.value);
-      // emit include_enqueued explicitly so a reload restores the same
-      // state. form-submit semantics differ (unchecked = absent) but the
-      // address bar is the user-facing record, so be explicit there.
-      p.set('include_enqueued', form.include_enqueued.checked ? '1' : '0');
+      // emit enqueued_filter explicitly so reloads restore the same view.
+      // empty string ("unenqueued") gets a value to disambiguate from
+      // "not yet set" — the JS reader treats absent params as "use the
+      // current form state", but for the address bar we want to pin it.
+      p.set('enqueued_filter', form.enqueued_filter.value);
       var qs = p.toString();
       var target = qs ? location.pathname + '?' + qs : location.pathname;
       if (location.pathname + location.search !== target) {

@@ -38,7 +38,7 @@ func TestUpsertItems_PersistsRows(t *testing.T) {
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, httptest.NewRequest("POST", "/v1/items", bytes.NewReader(body)))
 	require.Equal(t, http.StatusOK, rr.Code)
-	got, err := db.List(context.Background(), itemsdb.ListQuery{IncludeEnqueued: true, Limit: 10})
+	got, err := db.List(context.Background(), itemsdb.ListQuery{EnqueuedFilter: itemsdb.FilterAll, Limit: 10})
 	require.NoError(t, err)
 	assert.Len(t, got, 2)
 }
@@ -51,7 +51,7 @@ func TestListItems_FTS5Search(t *testing.T) {
 		{FeedName: "f", GUID: "2", Title: "Hard Quiz", FirstSeenAt: now, LastSeenAt: now},
 	}))
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest("GET", "/v1/items?q=guy&include_enqueued=1", nil))
+	h.ServeHTTP(rr, httptest.NewRequest("GET", "/v1/items?q=guy&enqueued_filter=all", nil))
 	require.Equal(t, http.StatusOK, rr.Code)
 	var resp api.ItemsListResponse
 	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
@@ -90,7 +90,7 @@ func TestPostTorrent_RecordsEnqueue(t *testing.T) {
 	h.ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
 
-	rows, err := db.List(context.Background(), itemsdb.ListQuery{IncludeEnqueued: true, Limit: 10})
+	rows, err := db.List(context.Background(), itemsdb.ListQuery{EnqueuedFilter: itemsdb.FilterAll, Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.True(t, rows[0].Enqueued)
@@ -112,7 +112,7 @@ func TestSetItemMeta_PersistsAndAppearsInList(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, rr.Code)
 
 	rr2 := httptest.NewRecorder()
-	h.ServeHTTP(rr2, httptest.NewRequest("GET", "/v1/items?include_enqueued=1", nil))
+	h.ServeHTTP(rr2, httptest.NewRequest("GET", "/v1/items?enqueued_filter=all", nil))
 	require.Equal(t, http.StatusOK, rr2.Code)
 	var resp api.ItemsListResponse
 	require.NoError(t, json.NewDecoder(rr2.Body).Decode(&resp))

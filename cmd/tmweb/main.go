@@ -35,6 +35,7 @@ import (
 	"github.com/atomicstack/torrent-manager/internal/aiclassify"
 	"github.com/atomicstack/torrent-manager/internal/api"
 	"github.com/atomicstack/torrent-manager/internal/feed"
+	"github.com/atomicstack/torrent-manager/internal/itemsdb"
 	"github.com/atomicstack/torrent-manager/internal/savedir"
 	"github.com/atomicstack/torrent-manager/internal/tlsx"
 	"github.com/atomicstack/torrent-manager/internal/torrent"
@@ -281,7 +282,7 @@ func newMux(
 		// classify → enqueue handoff is normally a few seconds; 24h lets a
 		// browsed-but-unqueued item sit overnight without a re-fetch. 50
 		// entries × ~100KB/.torrent = ~5MiB worst case.
-		torrents: newTorrentCache(50, 24*time.Hour),
+		torrents: newTorrentCache(),
 		r:        r,
 	}
 
@@ -333,9 +334,23 @@ func (h *handler) search(w http.ResponseWriter, req *http.Request) {
 	h.renderRows(w, req.Context(), ItemsQuery{
 		Q:               q.Get("q"),
 		Feed:            q.Get("feed_filter"),
-		IncludeEnqueued: q.Get("include_enqueued") == "1",
-		Limit:           200,
+		EnqueuedFilter: parseEnqueuedFilter(q.Get("enqueued_filter")),
+		Limit:          200,
 	})
+}
+
+// parseEnqueuedFilter mirrors the seedctl-side parser: accepts "all" or
+// "enqueued"; anything else (including empty) falls back to the default
+// "unenqueued" filter (zero value of itemsdb.EnqueuedFilter).
+func parseEnqueuedFilter(s string) itemsdb.EnqueuedFilter {
+	switch s {
+	case string(itemsdb.FilterAll):
+		return itemsdb.FilterAll
+	case string(itemsdb.FilterEnqueued):
+		return itemsdb.FilterEnqueued
+	default:
+		return itemsdb.FilterUnenqueued
+	}
 }
 
 // renderRows queries seedctl and writes the table-rows html fragment, or an
@@ -845,28 +860,28 @@ func (h *handler) enqueueDo(w http.ResponseWriter, req *http.Request) {
 		h.renderEnqueueError(w, fmt.Sprintf("seedctl add: %s", err))
 		return
 	}
-	// torrent is now committed to seedctl; the cached bytes have served
-	// their purpose and we can drop them eagerly rather than wait for ttl.
-	h.torrents.Delete(it.FeedName, it.GUID)
+	// the cached bytes stay around indefinitely (no TTL, no size cap) so
+	// re-opening the modal for this item is instant and the meta keeps
+	// showing without a tracker round-trip. cheap — ~100KB per entry.
 	slog.Info("manual_enqueue_done",
 		"feed", it.FeedName, "guid", it.GUID, "hash", entry.InfoHash,
 		"save_dir", saveDir, "had_rule", it.MatchedRule != "")
 
 	// re-render the table preserving whatever filter state the user had open.
 	// The modal form uses hx-include="#search" so the search form's q +
-	// feed_filter + include_enqueued are present in the POST body.
+	// feed_filter + enqueued_filter are present in the POST body.
 	h.renderRows(w, req.Context(), ItemsQuery{
-		Q:               req.PostForm.Get("q"),
-		Feed:            req.PostForm.Get("feed_filter"),
-		IncludeEnqueued: req.PostForm.Get("include_enqueued") == "1",
-		Limit:           200,
+		Q:              req.PostForm.Get("q"),
+		Feed:           req.PostForm.Get("feed_filter"),
+		EnqueuedFilter: parseEnqueuedFilter(req.PostForm.Get("enqueued_filter")),
+		Limit:          200,
 	})
 }
 
 // lookupItem fetches an item by (feed, guid) by listing the feed with
-// include_enqueued=1 and scanning. Not efficient but adequate at the
-// expected ≤200 items/feed; phase 3 could add a dedicated
-// /v1/items/by-id endpoint to seedctl if this becomes a hot path.
+// FilterAll and scanning. Not efficient but adequate at the expected
+// ≤200 items/feed; phase 3 could add a dedicated /v1/items/by-id
+// endpoint to seedctl if this becomes a hot path.
 //
 // TODO(phase3): add seedctl GET /v1/items/by-id?feed=&guid= to avoid the
 // full-feed scan.
@@ -875,9 +890,9 @@ func (h *handler) lookupItem(ctx context.Context, feed, guid string) (api.ItemRe
 		return api.ItemRecord{}, fmt.Errorf("missing feed or guid")
 	}
 	resp, err := h.seedctl.ListItems(ctx, ItemsQuery{
-		Feed:            feed,
-		IncludeEnqueued: true,
-		Limit:           1000,
+		Feed:           feed,
+		EnqueuedFilter: itemsdb.FilterAll,
+		Limit:          1000,
 	})
 	if err != nil {
 		return api.ItemRecord{}, err

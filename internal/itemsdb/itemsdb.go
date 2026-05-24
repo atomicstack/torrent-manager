@@ -64,13 +64,32 @@ type Enqueue struct {
 	EnqueuedAt time.Time
 }
 
+// EnqueuedFilter narrows List results by enqueue state. The default (zero
+// value) hides anything with a matching row in `enqueues`, preserving the
+// pre-tristate behaviour for callers that don't care.
+type EnqueuedFilter string
+
+const (
+	// FilterUnenqueued returns items NOT present in `enqueues`. This is the
+	// zero-value default — callers that omit the field get "show what hasn't
+	// been queued yet" semantics.
+	FilterUnenqueued EnqueuedFilter = ""
+	// FilterAll returns every item regardless of enqueue state. Used by
+	// Export, by tmweb's lookupItem (which must resolve already-enqueued
+	// items by guid), and by the "all" choice in the tmweb ui.
+	FilterAll EnqueuedFilter = "all"
+	// FilterEnqueued returns ONLY items present in `enqueues`. Used by the
+	// "enqueued" choice in the tmweb ui.
+	FilterEnqueued EnqueuedFilter = "enqueued"
+)
+
 // ListQuery parameters for List.
 type ListQuery struct {
-	Q               string // fts5 query string; empty = list by recency
-	Feed            string // exact feed_name match; empty = all feeds
-	IncludeEnqueued bool   // false = hide items present in `enqueues`
-	Limit           int    // 0 = 100 default
-	Offset          int
+	Q              string // fts5 query string; empty = list by recency
+	Feed           string // exact feed_name match; empty = all feeds
+	EnqueuedFilter EnqueuedFilter
+	Limit          int // 0 = 100 default
+	Offset         int
 }
 
 // DB wraps a *sql.DB with a typed surface. Safe for concurrent use.
@@ -272,8 +291,17 @@ func (d *DB) List(ctx context.Context, q ListQuery) ([]Item, error) {
 		where = append(where, "i.feed_name = ?")
 		args = append(args, q.Feed)
 	}
-	if !q.IncludeEnqueued {
+	switch q.EnqueuedFilter {
+	case FilterUnenqueued:
+		// Default (zero value): hide rows present in `enqueues`. A null
+		// info_hash can't match an enqueues row, so it's kept.
 		where = append(where, "(i.info_hash IS NULL OR NOT EXISTS (SELECT 1 FROM enqueues e WHERE e.info_hash = i.info_hash))")
+	case FilterEnqueued:
+		// Only rows present in `enqueues`. A null info_hash can never
+		// be enqueued, so it's naturally excluded.
+		where = append(where, "(i.info_hash IS NOT NULL AND EXISTS (SELECT 1 FROM enqueues e WHERE e.info_hash = i.info_hash))")
+	case FilterAll:
+		// No filter — return both enqueued and not-yet-enqueued rows.
 	}
 	whereSQL := ""
 	if len(where) > 0 {
@@ -347,7 +375,7 @@ WHERE feed_name = ? AND guid = ?
 
 // Export dumps every row (used for tmgr bootstrap when its local mirror is empty).
 func (d *DB) Export(ctx context.Context) ([]Item, error) {
-	return d.List(ctx, ListQuery{IncludeEnqueued: true, Limit: 1 << 30})
+	return d.List(ctx, ListQuery{EnqueuedFilter: FilterAll, Limit: 1 << 30})
 }
 
 // RecordEnqueue inserts (or replaces) an enqueues row.

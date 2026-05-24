@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/atomicstack/torrent-manager/internal/api"
+	"github.com/atomicstack/torrent-manager/internal/itemsdb"
 )
 
 // Seedctl is a thin http client wrapping the seedctl json/binary endpoints
@@ -35,14 +36,15 @@ func NewSeedctl(base string, hc *http.Client) *Seedctl {
 	}
 }
 
-// ItemsQuery is the input to ListItems. The zero value lists everything
-// (unfiltered, server defaults for paging).
+// ItemsQuery is the input to ListItems. The zero EnqueuedFilter value
+// matches the server's default ("unenqueued") so callers that don't care
+// get the standard filter-out-already-enqueued semantics.
 type ItemsQuery struct {
-	Q               string
-	Feed            string
-	IncludeEnqueued bool
-	Limit           int
-	Offset          int
+	Q              string
+	Feed           string
+	EnqueuedFilter itemsdb.EnqueuedFilter
+	Limit          int
+	Offset         int
 }
 
 // Healthz pings seedctl's /healthz endpoint. Returns (true, nil) iff the
@@ -79,8 +81,8 @@ func (s *Seedctl) ListItems(ctx context.Context, q ItemsQuery) (api.ItemsListRes
 	if q.Feed != "" {
 		values.Set("feed", q.Feed)
 	}
-	if q.IncludeEnqueued {
-		values.Set("include_enqueued", "1")
+	if q.EnqueuedFilter != "" {
+		values.Set("enqueued_filter", string(q.EnqueuedFilter))
 	}
 	if q.Limit > 0 {
 		values.Set("limit", strconv.Itoa(q.Limit))

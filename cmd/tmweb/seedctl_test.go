@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/atomicstack/torrent-manager/internal/api"
+	"github.com/atomicstack/torrent-manager/internal/itemsdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -51,7 +52,7 @@ func TestSeedctl_ListItems_PassesQueryParams(t *testing.T) {
 		q := r.URL.Query()
 		assert.Equal(t, "guy", q.Get("q"))
 		assert.Equal(t, "TrackerA (TV)", q.Get("feed"))
-		assert.Equal(t, "1", q.Get("include_enqueued"))
+		assert.Equal(t, "all", q.Get("enqueued_filter"))
 		assert.Equal(t, "10", q.Get("limit"))
 		assert.Equal(t, "20", q.Get("offset"))
 		w.Header().Set("Content-Type", "application/json")
@@ -63,11 +64,11 @@ func TestSeedctl_ListItems_PassesQueryParams(t *testing.T) {
 
 	c := NewSeedctl(srv.URL, srv.Client())
 	out, err := c.ListItems(context.Background(), ItemsQuery{
-		Q:               "guy",
-		Feed:            "TrackerA (TV)",
-		IncludeEnqueued: true,
-		Limit:           10,
-		Offset:          20,
+		Q:              "guy",
+		Feed:           "TrackerA (TV)",
+		EnqueuedFilter: itemsdb.FilterAll,
+		Limit:          10,
+		Offset:         20,
 	})
 	require.NoError(t, err)
 	require.Len(t, out.Items, 1)

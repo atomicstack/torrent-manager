@@ -41,7 +41,11 @@ func TestRenderLayout_HasURLSyncScript(t *testing.T) {
 	assert.Contains(t, body, "history.replaceState", "URL must update via replaceState on form change")
 	assert.Contains(t, body, "form.q.value", "search query input is named 'q'")
 	assert.Contains(t, body, "form.feed_filter.value", "feed dropdown is named 'feed_filter'")
-	assert.Contains(t, body, "form.include_enqueued.checked", "checkbox is named 'include_enqueued'")
+	assert.Contains(t, body, "form.enqueued_filter.value", "enqueued filter is a select named 'enqueued_filter'")
+	// the dropdown must offer the three filter modes.
+	assert.Contains(t, body, `<option value="all" selected>all</option>`, "default is 'all'")
+	assert.Contains(t, body, `<option value="enqueued">enqueued</option>`)
+	assert.Contains(t, body, `<option value="">unenqueued</option>`)
 }
 
 // TestRenderRows_EmptyShowsPlaceholder ensures the "no matches" row is
