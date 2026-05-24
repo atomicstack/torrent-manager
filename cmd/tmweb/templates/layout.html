@@ -31,6 +31,43 @@
       <label><input type="checkbox" name="include_enqueued" value="1" checked> include enqueued</label>
     </form>
   </header>
+  <script>
+  // URL <-> filter-form sync. Inline + synchronous so the form is populated
+  // BEFORE htmx's hx-trigger="load" fires the initial search — otherwise
+  // a reload of /?q=foo would briefly search with q="" before the URL was
+  // applied. Reads location.search on load; writes via replaceState on every
+  // form change (no debounce — replaceState is cheap, and we want the bar
+  // to match what the user sees).
+  (function () {
+    var form = document.getElementById('search');
+    if (!form) return;
+    var params = new URLSearchParams(location.search);
+    if (params.has('q')) form.q.value = params.get('q');
+    if (params.has('feed_filter')) form.feed_filter.value = params.get('feed_filter');
+    // include_enqueued: explicit 0/1 in url. absent = keep template default
+    // (checked). this matches the original ui behaviour for a fresh visit.
+    if (params.has('include_enqueued')) {
+      form.include_enqueued.checked = params.get('include_enqueued') !== '0';
+    }
+
+    function syncURL() {
+      var p = new URLSearchParams();
+      if (form.q.value) p.set('q', form.q.value);
+      if (form.feed_filter.value) p.set('feed_filter', form.feed_filter.value);
+      // emit include_enqueued explicitly so a reload restores the same
+      // state. form-submit semantics differ (unchecked = absent) but the
+      // address bar is the user-facing record, so be explicit there.
+      p.set('include_enqueued', form.include_enqueued.checked ? '1' : '0');
+      var qs = p.toString();
+      var target = qs ? location.pathname + '?' + qs : location.pathname;
+      if (location.pathname + location.search !== target) {
+        history.replaceState(null, '', target);
+      }
+    }
+    form.addEventListener('input', syncURL);
+    form.addEventListener('change', syncURL);
+  })();
+  </script>
   <main>
     <table>
       <thead>

@@ -27,6 +27,23 @@ func TestRenderLayout_IncludesFeedOptions(t *testing.T) {
 	assert.Contains(t, body, `<option value="">all feeds</option>`)
 }
 
+// TestRenderLayout_HasURLSyncScript verifies the layout ships the inline JS
+// that reads URL params on load and writes them on form changes. The script
+// itself isn't tested via execution (no DOM here), but its presence + the
+// key identifiers it depends on are pinned.
+func TestRenderLayout_HasURLSyncScript(t *testing.T) {
+	r, err := newRenderer()
+	require.NoError(t, err)
+	var buf bytes.Buffer
+	require.NoError(t, r.layout.Execute(&buf, struct{ Feeds []string }{Feeds: []string{"TrackerA (TV)"}}))
+	body := buf.String()
+	assert.Contains(t, body, "URLSearchParams(location.search)", "URL read must happen on load")
+	assert.Contains(t, body, "history.replaceState", "URL must update via replaceState on form change")
+	assert.Contains(t, body, "form.q.value", "search query input is named 'q'")
+	assert.Contains(t, body, "form.feed_filter.value", "feed dropdown is named 'feed_filter'")
+	assert.Contains(t, body, "form.include_enqueued.checked", "checkbox is named 'include_enqueued'")
+}
+
 // TestRenderRows_EmptyShowsPlaceholder ensures the "no matches" row is
 // rendered when the upstream returns zero items, so the table doesn't get
 // stuck on "loading…" after a search.
