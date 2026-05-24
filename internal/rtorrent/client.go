@@ -61,34 +61,40 @@ func (c *Client) callStringMatrix(method string, args ...xmlValue) ([][]string, 
 	return decodeXMLRPCResponseStringMatrix(resp)
 }
 
-// TorrentMetadata is a (hash, name) pair returned by ListTorrents. Hash is
-// uppercase hex; Name is info.name (the .torrent's single filename or root
-// directory).
+// TorrentMetadata is a (hash, name, directory) tuple returned by
+// ListTorrents. Hash is uppercase hex; Name is info.name (the .torrent's
+// single filename or root directory); Directory is rtorrent's download
+// directory for the torrent (absolute path, including a trailing
+// info.name for multi-file torrents).
 type TorrentMetadata struct {
-	Hash string
-	Name string
+	Hash      string
+	Name      string
+	Directory string
 }
 
-// ListTorrents invokes d.multicall2 to fetch every torrent's hash + name in
-// one round-trip. Ordering reflects rtorrent's view (main).
+// ListTorrents invokes d.multicall2 to fetch every torrent's hash, name,
+// and download directory in one round-trip. Ordering reflects rtorrent's
+// view (main).
 func (c *Client) ListTorrents() ([]TorrentMetadata, error) {
 	rows, err := c.callStringMatrix("d.multicall2",
 		xmlString(""),    // arg 1: target rtorrent (empty = current)
 		xmlString("main"), // arg 2: view to enumerate
 		xmlString("d.hash="),
 		xmlString("d.name="),
+		xmlString("d.directory="),
 	)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]TorrentMetadata, 0, len(rows))
 	for _, row := range rows {
-		if len(row) < 2 {
+		if len(row) < 3 {
 			continue
 		}
 		out = append(out, TorrentMetadata{
-			Hash: strings.ToUpper(row[0]),
-			Name: row[1],
+			Hash:      strings.ToUpper(row[0]),
+			Name:      row[1],
+			Directory: row[2],
 		})
 	}
 	return out, nil
