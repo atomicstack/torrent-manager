@@ -31,8 +31,9 @@ type Item struct {
 	MatchedRule   string // empty when no rule matched
 	FirstSeenAt   time.Time
 	LastSeenAt    time.Time
-	Enqueued      bool   // populated by List; true if there's a matching row in enqueues
-	EnqueueSource Source // SourceAuto | SourceManual | '' when Enqueued = false
+	Enqueued       bool   // populated by List; true if there's a matching row in enqueues
+	EnqueueSource  Source // SourceAuto | SourceManual | '' when Enqueued = false
+	EnqueueSaveDir string // populated by List; the save_dir recorded at enqueue time. empty when Enqueued = false.
 
 	// Meta fields are 0 when no .torrent has been fetched + parsed for this
 	// item yet. Populated by SetMeta from tmgr (auto-enqueue) or tmweb
@@ -344,7 +345,8 @@ SELECT i.id, i.feed_name, i.guid, i.title,
        i.first_seen_at, i.last_seen_at,
        COALESCE(i.total_bytes, 0), COALESCE(i.file_count, 0), COALESCE(i.dir_count, 0),
        CASE WHEN i.info_hash IS NOT NULL AND EXISTS (SELECT 1 FROM enqueues e WHERE e.info_hash = i.info_hash) THEN 1 ELSE 0 END AS enqueued,
-       COALESCE((SELECT source FROM enqueues e WHERE e.info_hash = i.info_hash), '') AS enq_source
+       COALESCE((SELECT source FROM enqueues e WHERE e.info_hash = i.info_hash), '') AS enq_source,
+       COALESCE((SELECT save_dir FROM enqueues e WHERE e.info_hash = i.info_hash), '') AS enq_save_dir
 FROM items i %s %s ORDER BY %s LIMIT ? OFFSET ?
 `, join, whereSQL, order)
 	args = append(args, q.Limit, q.Offset)
@@ -363,7 +365,7 @@ FROM items i %s %s ORDER BY %s LIMIT ? OFFSET ?
 			&it.InfoHash, &it.MatchedRule,
 			&first, &last,
 			&it.TotalBytes, &it.FileCount, &it.DirCount,
-			&enqueued, &it.EnqueueSource); err != nil {
+			&enqueued, &it.EnqueueSource, &it.EnqueueSaveDir); err != nil {
 			return nil, 0, err
 		}
 		it.FirstSeenAt = time.Unix(first, 0)

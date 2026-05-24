@@ -262,11 +262,12 @@ func itemRowsToRecords(in []itemsdb.Item) []api.ItemRecord {
 			MatchedRule:   it.MatchedRule,
 			FirstSeenAt:   it.FirstSeenAt.Unix(),
 			LastSeenAt:    it.LastSeenAt.Unix(),
-			Enqueued:      it.Enqueued,
-			EnqueueSource: string(it.EnqueueSource),
-			TotalBytes:    it.TotalBytes,
-			FileCount:     it.FileCount,
-			DirCount:      it.DirCount,
+			Enqueued:       it.Enqueued,
+			EnqueueSource:  string(it.EnqueueSource),
+			EnqueueSaveDir: it.EnqueueSaveDir,
+			TotalBytes:     it.TotalBytes,
+			FileCount:      it.FileCount,
+			DirCount:       it.DirCount,
 		})
 	}
 	return out

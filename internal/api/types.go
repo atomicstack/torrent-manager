@@ -45,8 +45,13 @@ type ItemRecord struct {
 	MatchedRule   string `json:"matched_rule,omitempty"`
 	FirstSeenAt   int64  `json:"first_seen_at"`
 	LastSeenAt    int64  `json:"last_seen_at"`
-	Enqueued      bool   `json:"enqueued,omitempty"`
-	EnqueueSource string `json:"enqueue_source,omitempty"` // 'auto' | 'manual' | ''
+	Enqueued       bool   `json:"enqueued,omitempty"`
+	EnqueueSource  string `json:"enqueue_source,omitempty"` // 'auto' | 'manual' | ''
+	// EnqueueSaveDir is the absolute on-disk path recorded at enqueue
+	// time. Empty when the row isn't enqueued (or when the enqueue went
+	// through with no explicit save_dir → rtorrent's default download
+	// dir applied).
+	EnqueueSaveDir string `json:"enqueue_save_dir,omitempty"`
 	// Meta fields are 0 until something has fetched + parsed the .torrent
 	// and called /v1/items/meta. TotalBytes > 0 is the "have meta" signal;
 	// FileCount/DirCount can both be 0 on a single-file torrent.

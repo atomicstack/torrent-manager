@@ -539,7 +539,17 @@ func (h *handler) confirmRuleMatched(w http.ResponseWriter, ctx context.Context,
 			fmt.Sprintf("watchlist no longer has rule %q. reload the page?", it.MatchedRule))
 		return
 	}
-	saveDir, _ := savedir.Derive(h.roots, *rule, it.Title)
+	// for an already-enqueued item, the on-disk location is whatever
+	// seedctl recorded at enqueue time (rtorrent's d.directory for
+	// backfilled rows, the X-Save-Directory header otherwise). prefer
+	// that over re-deriving from the watchlist rule so the field
+	// reflects reality, not intent.
+	var saveDir string
+	if it.Enqueued && it.EnqueueSaveDir != "" {
+		saveDir = it.EnqueueSaveDir
+	} else {
+		saveDir, _ = savedir.Derive(h.roots, *rule, it.Title)
+	}
 	data := confirmRuleData{
 		Item:        it,
 		Category:    h.feedCategories[it.FeedName],
@@ -635,17 +645,30 @@ func (h *handler) confirmNoRule(w http.ResponseWriter, ctx context.Context, it a
 		Completions: h.collectCompletions(ctx),
 	}
 
-	switch category {
-	case "movies":
-		// movies just live under roots.Movies — no subdir convention.
-		data.ProposedSaveDir = h.stripPrefix(h.roots.Movies)
-	case "tv":
-		// Leave the field empty; the user clicks the claude icon to populate
-		// it (or types something themselves). ClaudeAvailable controls the
-		// icon's presence.
-		data.ClaudeAvailable = h.ai != nil
-	default:
-		// "other" / unknown: empty field, no icon.
+	// already-enqueued items: show the real on-disk location seedctl
+	// recorded rather than a proposed dir. covers items backfilled from
+	// rtorrent's session as well as anything tmgr/tmweb auto-enqueued
+	// previously.
+	if it.Enqueued && it.EnqueueSaveDir != "" {
+		data.ProposedSaveDir = h.stripPrefix(it.EnqueueSaveDir)
+	} else {
+		switch category {
+		case "movies":
+			// movies just live under roots.Movies — no subdir convention.
+			data.ProposedSaveDir = h.stripPrefix(h.roots.Movies)
+		case "tv":
+			// Leave the field empty; the user clicks the claude icon to populate
+			// it (or types something themselves). ClaudeAvailable controls the
+			// icon's presence.
+			data.ClaudeAvailable = h.ai != nil
+		default:
+			// "other" / unknown: empty field, no icon.
+		}
+	}
+	// the ✨ icon stays disabled for enqueued items either way — no
+	// point re-classifying a torrent that's already on disk.
+	if it.Enqueued {
+		data.ClaudeAvailable = false
 	}
 	// meta on the seedctl items row is the persistent cache — see comment
 	// in confirmRuleMatched for details.
