@@ -121,9 +121,13 @@ th.sortable .sort-arrow {
   color: var(--accent);
 }
 
-/* pagination bar: summary line on the left, control buttons on the right.
-   sits directly under the table. */
-#pagination {
+/* pagination bar sits directly under the table. layout:
+     [summary] [page controls]            [rows / page select]
+   the #pagination div is server-rendered + OOB-swapped on every
+   /api/search response; the per_page select is form-associated via
+   form="search" but lives outside the form so it can sit here
+   visually rather than up in the header. */
+.pagination-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -131,6 +135,17 @@ th.sortable .sort-arrow {
   padding: 0.6rem 0.25rem;
   font-size: 0.85rem;
   color: var(--muted);
+}
+#pagination {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex: 1;
+}
+.per-page-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
 }
 .pagination-controls {
   display: inline-flex;

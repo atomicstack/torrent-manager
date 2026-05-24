@@ -33,13 +33,6 @@
         <option value="enqueued">enqueued</option>
         <option value="">unenqueued</option>
       </select>
-      <select name="per_page" title="rows per page">
-        <option value="25">25</option>
-        <option value="50" selected>50</option>
-        <option value="100">100</option>
-        <option value="200">200</option>
-        <option value="500">500</option>
-      </select>
       <!-- hidden state driven by the column headers + pagination buttons.
            kept in the form so htmx submits them automatically as part of
            every /api/search request. -->
@@ -97,12 +90,25 @@
     //    snap back to 1 before htmx fires the search request so the user
     //    never sees an empty result on a now-out-of-range page.
     function resetPage() { form.page.value = '1'; }
-    ['q', 'feed_filter', 'enqueued_filter', 'per_page', 'sort_field', 'sort_dir'].forEach(function (name) {
+    ['q', 'feed_filter', 'enqueued_filter', 'sort_field', 'sort_dir'].forEach(function (name) {
       var el = form.elements[name];
       if (el) el.addEventListener('change', resetPage);
     });
     // q is a search input — input events too (change only fires on blur).
     form.q.addEventListener('input', resetPage);
+
+    // per_page lives OUTSIDE the form's DOM subtree (positioned next to
+    // the pagination bar at the bottom of the page) via form="search".
+    // Change events don't bubble to the form, so htmx's "change from:
+    // select" filter never fires for it — wire it explicitly: reset the
+    // page, mirror to URL, then dispatch a synthetic change on the
+    // (in-form) hidden page input so htmx's "change from:input[type=
+    // hidden]" trigger picks it up and refires /api/search.
+    form.elements.per_page.addEventListener('change', function () {
+      resetPage();
+      syncURL();
+      form.page.dispatchEvent(new Event('change', { bubbles: true }));
+    });
 
     // 4. Sortable column headers. Each <th data-sort="..."> click sets
     //    sort_field; if the same field is clicked again, flip sort_dir.
@@ -179,7 +185,24 @@
         <tr><td colspan="3" class="empty">loading…</td></tr>
       </tbody>
     </table>
-    <div id="pagination"></div>
+    <div class="pagination-bar">
+      <!-- #pagination is OOB-swapped by /api/search responses. -->
+      <div id="pagination"></div>
+      <!-- per_page belongs to the search form (form="search") so htmx
+           serialises it on submit even though it lives outside the
+           form's DOM subtree, where it visually sits next to the
+           pagination controls. -->
+      <label class="per-page-label">
+        rows / page
+        <select name="per_page" form="search" title="rows per page">
+          <option value="25">25</option>
+          <option value="50" selected>50</option>
+          <option value="100">100</option>
+          <option value="200">200</option>
+          <option value="500">500</option>
+        </select>
+      </label>
+    </div>
   </main>
   <div id="modal"></div>
   <script>

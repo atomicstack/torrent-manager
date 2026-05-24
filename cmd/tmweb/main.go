@@ -170,26 +170,39 @@ func computeCommonRoot(roots savedir.Roots) string {
 	return p + string(filepath.Separator)
 }
 
-// stripPrefix returns absPath with the handler's commonRoot prefix removed
-// when it matches. Falls through to absPath when commonRoot is empty or the
-// path doesn't sit under it (e.g. user already passing a different absolute
-// path through the modal).
+// stripPrefix turns an absolute save_dir into the most-compact form the
+// modal can display: paths under commonRoot lose the prefix entirely
+// (so "/home/seedbox/t/tv/foo" → "tv/foo"); paths under homePrefix get
+// the "~/" shorthand (so "/home/seedbox/downloads/movies" → "~/downloads/
+// movies"); anything else stays absolute.
 func (h *handler) stripPrefix(absPath string) string {
-	if h.commonRoot == "" {
-		return absPath
+	if h.commonRoot != "" {
+		if rel, ok := strings.CutPrefix(absPath, h.commonRoot); ok {
+			return rel
+		}
 	}
-	if rel, ok := strings.CutPrefix(absPath, h.commonRoot); ok {
-		return rel
+	if h.homePrefix != "" {
+		if rel, ok := strings.CutPrefix(absPath, h.homePrefix); ok {
+			return "~/" + rel
+		}
 	}
 	return absPath
 }
 
-// expandPrefix turns a relative save_dir (as typed in the modal) back into
-// an absolute path. Absolute inputs and empty values pass through unchanged
-// so a user can still type a fully-qualified path or leave the field blank.
+// expandPrefix inverts stripPrefix on POST. Accepts three input shapes
+// from the form: "~/..." (expanded against homePrefix), an absolute
+// "/..." path (passed through), or a relative path (expanded against
+// commonRoot). Empty stays empty so the caller can omit the
+// X-Save-Directory header and let rtorrent fall back to its default
+// download dir.
 func (h *handler) expandPrefix(rel string) string {
 	if rel == "" {
 		return ""
+	}
+	if h.homePrefix != "" {
+		if tail, ok := strings.CutPrefix(rel, "~/"); ok {
+			return h.homePrefix + tail
+		}
 	}
 	if filepath.IsAbs(rel) {
 		return rel
@@ -198,6 +211,21 @@ func (h *handler) expandPrefix(rel string) string {
 		return rel
 	}
 	return h.commonRoot + rel
+}
+
+// deriveHomePrefix takes the commonRoot and returns the directory one
+// level up (with trailing slash) — typically the seedbox's home dir.
+// E.g. commonRoot="/home/seedbox/t/" → "/home/seedbox/". Empty when
+// commonRoot is empty or evaluates to the filesystem root.
+func deriveHomePrefix(commonRoot string) string {
+	if commonRoot == "" {
+		return ""
+	}
+	parent := filepath.Dir(strings.TrimSuffix(commonRoot, string(filepath.Separator)))
+	if parent == "" || parent == "/" {
+		return ""
+	}
+	return parent + string(filepath.Separator)
 }
 
 // collectCompletions fetches the existing show / movie dir basenames from
@@ -251,6 +279,12 @@ type handler struct {
 	// the common root — and expand it back to absolute on POST. Empty when
 	// the two roots don't share a parent (degrades to absolute paths).
 	commonRoot string
+	// homePrefix is the seedbox-home directory we replace with "~/" in
+	// modal-displayed paths that aren't under commonRoot (typically the
+	// rtorrent-backfilled rows that live in ~/downloads/...). Same
+	// stripPrefix/expandPrefix machinery — first commonRoot, then
+	// homePrefix, then fall through to absolute.
+	homePrefix string
 	// torrents holds the .torrent bytes + parsed meta + info hash for items
 	// the user is currently classifying/enqueueing. populated by
 	// enqueueClassify (so claude gets the layout) and consumed by enqueueDo
@@ -280,6 +314,7 @@ func newMux(
 		feedCategories: feedCategories,
 		ai:             ai,
 		commonRoot:     computeCommonRoot(roots),
+		homePrefix:     deriveHomePrefix(computeCommonRoot(roots)),
 		// classify → enqueue handoff is normally a few seconds; 24h lets a
 		// browsed-but-unqueued item sit overnight without a re-fetch. 50
 		// entries × ~100KB/.torrent = ~5MiB worst case.
