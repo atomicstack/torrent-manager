@@ -1,0 +1,25 @@
+{{define "_pagination.html"}}
+<div id="pagination" hx-swap-oob="true">
+  <span class="pagination-summary">
+    {{- if eq .Total 0 -}}
+    no rows matching filter
+    {{- else -}}
+    {{.Total}} {{if eq .Total 1}}row{{else}}rows{{end}} matching filter
+    {{- if gt .TotalPages 1}}
+    &nbsp;·&nbsp;showing {{.FirstShown}}–{{.LastShown}}
+    {{- end -}}
+    {{- end -}}
+  </span>
+  {{if gt .TotalPages 1}}
+  <span class="pagination-controls">
+    <button type="button" class="page-btn" data-page="1" {{if not .HasPrev}}disabled{{end}} title="first">«</button>
+    <button type="button" class="page-btn" data-page="{{.PrevTen}}" {{if not .HasPrev}}disabled{{end}} title="back 10">−10</button>
+    <button type="button" class="page-btn" data-page="{{.PrevOne}}" {{if not .HasPrev}}disabled{{end}} title="back 1">‹</button>
+    <span class="pagination-current">{{.Page}}&nbsp;/&nbsp;{{.TotalPages}}</span>
+    <button type="button" class="page-btn" data-page="{{.NextOne}}" {{if not .HasNext}}disabled{{end}} title="forward 1">›</button>
+    <button type="button" class="page-btn" data-page="{{.NextTen}}" {{if not .HasNext}}disabled{{end}} title="forward 10">+10</button>
+    <button type="button" class="page-btn" data-page="{{.TotalPages}}" {{if not .HasNext}}disabled{{end}} title="last">»</button>
+  </span>
+  {{end}}
+</div>
+{{end}}

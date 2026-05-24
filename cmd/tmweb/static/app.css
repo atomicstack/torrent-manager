@@ -104,6 +104,59 @@ th, td {
   border-bottom: 1px solid var(--border);
 }
 
+/* sortable column headers: clickable, with an arrow showing the current
+   sort field + direction. inactive headers get a low-opacity arrow on
+   hover as an affordance. */
+th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+th.sortable:hover { background: var(--row-hover, rgba(127,127,127,0.06)); }
+th.sortable.sorted { color: var(--accent); }
+th.sortable .sort-arrow {
+  display: inline-block;
+  min-width: 0.7em;
+  margin-left: 0.2rem;
+  font-size: 0.9em;
+  color: var(--accent);
+}
+
+/* pagination bar: summary line on the left, control buttons on the right.
+   sits directly under the table. */
+#pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.6rem 0.25rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.pagination-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.page-btn {
+  font-family: inherit;
+  font-size: 0.9em;
+  padding: 0.15rem 0.5rem;
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+  min-width: 2.4em;
+  text-align: center;
+}
+.page-btn:hover:not([disabled]) { border-color: var(--accent); color: var(--accent); }
+.page-btn[disabled] { opacity: 0.35; cursor: default; }
+.pagination-current {
+  padding: 0 0.5rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+}
+
 .cell-title {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   word-break: break-all;

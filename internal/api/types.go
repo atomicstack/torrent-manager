@@ -80,8 +80,12 @@ type ItemsUpsertResponse struct {
 }
 
 // ItemsListResponse is the reply for GET /v1/items and /v1/items/export.
+// Total is the count of items matching the filter independent of any
+// Limit/Offset (i.e. the unpaginated row count) — used by the tmweb ui
+// to render the page count and the "N rows matching filter" summary.
 type ItemsListResponse struct {
 	Items []ItemRecord `json:"items"`
+	Total int          `json:"total,omitempty"`
 }
 
 // DirsListResponse is the reply for GET /v1/dirs?root=<name>. The names are

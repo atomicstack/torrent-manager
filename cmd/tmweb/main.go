@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -326,17 +327,28 @@ func (h *handler) index(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
-// search renders just the <tbody> rows for the htmx swap. Errors from
-// seedctl are rendered as a single error row so htmx still gets a coherent
-// fragment to swap in (instead of leaving "loading…" stuck on the page).
+// search renders the <tbody> rows for the htmx swap plus an OOB-swapped
+// pagination block. Reads page/per_page/sort from the query string;
+// errors from seedctl are rendered as a single error row.
 func (h *handler) search(w http.ResponseWriter, req *http.Request) {
 	q := req.URL.Query()
+	page, _ := strconv.Atoi(q.Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	perPage, _ := strconv.Atoi(q.Get("per_page"))
+	if perPage <= 0 {
+		perPage = 50
+	}
 	h.renderRows(w, req.Context(), ItemsQuery{
-		Q:               q.Get("q"),
-		Feed:            q.Get("feed_filter"),
+		Q:              q.Get("q"),
+		Feed:           q.Get("feed_filter"),
 		EnqueuedFilter: parseEnqueuedFilter(q.Get("enqueued_filter")),
-		Limit:          200,
-	})
+		SortField:      itemsdb.SortField(q.Get("sort_field")),
+		SortDir:        itemsdb.SortDir(q.Get("sort_dir")),
+		Limit:          perPage,
+		Offset:         (page - 1) * perPage,
+	}, page, perPage)
 }
 
 // parseEnqueuedFilter mirrors the seedctl-side parser: accepts "all" or
@@ -353,17 +365,20 @@ func parseEnqueuedFilter(s string) itemsdb.EnqueuedFilter {
 	}
 }
 
-// renderRows queries seedctl and writes the table-rows html fragment, or an
-// error row on failure. Shared by GET /api/search and POST /api/enqueue
-// (which re-renders with the user's preserved filter state after a
-// successful enqueue).
-func (h *handler) renderRows(w http.ResponseWriter, ctx context.Context, q ItemsQuery) {
+// renderRows queries seedctl and writes the table-rows html fragment AND
+// an OOB-swapped pagination block. Shared by GET /api/search and POST
+// /api/enqueue (which re-renders with preserved filter state after a
+// successful enqueue). On seedctl error a single error row replaces the
+// rows; the pagination block still renders (with zero counts) so the
+// container doesn't get stranded.
+func (h *handler) renderRows(w http.ResponseWriter, ctx context.Context, q ItemsQuery, page, perPage int) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	items, err := h.seedctl.ListItems(ctx, q)
 	if err != nil {
 		slog.Debug("search_seedctl_failed", "err", err)
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `<tr><td colspan="4" class="empty">error: %s</td></tr>`, html.EscapeString(err.Error()))
+		fmt.Fprintf(w, `<tr><td colspan="3" class="empty">error: %s</td></tr>`, html.EscapeString(err.Error()))
+		_ = h.r.pagination.Execute(w, paginationData{Page: page, PerPage: perPage})
 		return
 	}
 	if err := h.r.rows.Execute(w, rowsTemplateData{
@@ -372,7 +387,75 @@ func (h *handler) renderRows(w http.ResponseWriter, ctx context.Context, q Items
 	}); err != nil {
 		slog.Error("render_rows", "err", err)
 		http.Error(w, "render", http.StatusInternalServerError)
+		return
 	}
+	if err := h.r.pagination.Execute(w, newPaginationData(items.Total, page, perPage)); err != nil {
+		slog.Error("render_pagination", "err", err)
+	}
+}
+
+// paginationData feeds _pagination.html. Computes the page-control
+// targets server-side so the template can stay declarative (each button
+// just renders data-page="<n>"; JS sets it on the hidden input + fires).
+type paginationData struct {
+	Total      int
+	Page       int
+	PerPage    int
+	TotalPages int
+	HasPrev    bool
+	HasNext    bool
+	PrevOne    int
+	NextOne    int
+	PrevTen    int
+	NextTen    int
+	FirstShown int // 1-indexed row position of the first row on this page
+	LastShown  int // 1-indexed row position of the last row on this page
+}
+
+func newPaginationData(total, page, perPage int) paginationData {
+	if perPage <= 0 {
+		perPage = 50
+	}
+	if page < 1 {
+		page = 1
+	}
+	totalPages := (total + perPage - 1) / perPage
+	if totalPages < 1 {
+		totalPages = 1
+	}
+	if page > totalPages {
+		page = totalPages
+	}
+	first, last := 0, 0
+	if total > 0 {
+		first = (page-1)*perPage + 1
+		last = first + perPage - 1
+		if last > total {
+			last = total
+		}
+	}
+	return paginationData{
+		Total: total, Page: page, PerPage: perPage,
+		TotalPages: totalPages,
+		HasPrev:    page > 1,
+		HasNext:    page < totalPages,
+		PrevOne:    clampPage(page-1, totalPages),
+		NextOne:    clampPage(page+1, totalPages),
+		PrevTen:    clampPage(page-10, totalPages),
+		NextTen:    clampPage(page+10, totalPages),
+		FirstShown: first,
+		LastShown:  last,
+	}
+}
+
+func clampPage(p, total int) int {
+	if p < 1 {
+		return 1
+	}
+	if p > total {
+		return total
+	}
+	return p
 }
 
 // rowsTemplateData carries both the rows and a JSON object literal of
@@ -867,15 +950,26 @@ func (h *handler) enqueueDo(w http.ResponseWriter, req *http.Request) {
 		"feed", it.FeedName, "guid", it.GUID, "hash", entry.InfoHash,
 		"save_dir", saveDir, "had_rule", it.MatchedRule != "")
 
-	// re-render the table preserving whatever filter state the user had open.
-	// The modal form uses hx-include="#search" so the search form's q +
-	// feed_filter + enqueued_filter are present in the POST body.
+	// re-render the table preserving whatever filter/sort/page state the
+	// user had open. The modal form uses hx-include="#search" so every
+	// hidden + visible input on the search form is present in this POST.
+	page, _ := strconv.Atoi(req.PostForm.Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	perPage, _ := strconv.Atoi(req.PostForm.Get("per_page"))
+	if perPage <= 0 {
+		perPage = 50
+	}
 	h.renderRows(w, req.Context(), ItemsQuery{
 		Q:              req.PostForm.Get("q"),
 		Feed:           req.PostForm.Get("feed_filter"),
 		EnqueuedFilter: parseEnqueuedFilter(req.PostForm.Get("enqueued_filter")),
-		Limit:          200,
-	})
+		SortField:      itemsdb.SortField(req.PostForm.Get("sort_field")),
+		SortDir:        itemsdb.SortDir(req.PostForm.Get("sort_dir")),
+		Limit:          perPage,
+		Offset:         (page - 1) * perPage,
+	}, page, perPage)
 }
 
 // lookupItem fetches an item by (feed, guid) by listing the feed with

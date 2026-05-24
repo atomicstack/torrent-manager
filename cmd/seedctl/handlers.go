@@ -178,10 +178,12 @@ func (h *handler) listItems(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	offset, _ := strconv.Atoi(q.Get("offset"))
-	rows, err := h.items.List(r.Context(), itemsdb.ListQuery{
+	rows, total, err := h.items.List(r.Context(), itemsdb.ListQuery{
 		Q:              q.Get("q"),
 		Feed:           q.Get("feed"),
 		EnqueuedFilter: parseEnqueuedFilter(q.Get("enqueued_filter")),
+		SortField:      itemsdb.SortField(q.Get("sort_field")),
+		SortDir:        itemsdb.SortDir(q.Get("sort_dir")),
 		Limit:          limit,
 		Offset:         offset,
 	})
@@ -190,7 +192,10 @@ func (h *handler) listItems(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, api.ItemsListResponse{Items: itemRowsToRecords(rows)})
+	writeJSON(w, http.StatusOK, api.ItemsListResponse{
+		Items: itemRowsToRecords(rows),
+		Total: total,
+	})
 }
 
 func (h *handler) exportItems(w http.ResponseWriter, r *http.Request) {

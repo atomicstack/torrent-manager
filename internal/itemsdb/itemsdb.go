@@ -83,11 +83,37 @@ const (
 	FilterEnqueued EnqueuedFilter = "enqueued"
 )
 
+// SortField names a column the ui can sort on. The empty zero value
+// preserves the historical default (rss feed order: first_seen_at DESC,
+// id ASC; on fts5 hits, bm25 first, with the same tiebreaker).
+type SortField string
+
+const (
+	SortDefault    SortField = ""
+	SortTitle      SortField = "title"
+	SortFeed       SortField = "feed_name"
+	SortFirstSeen  SortField = "first_seen_at"
+	SortLastSeen   SortField = "last_seen_at"
+	SortTotalBytes SortField = "total_bytes"
+	SortEnqueued   SortField = "enqueued"
+)
+
+// SortDir is asc or desc. Empty falls through to the per-field default
+// (descending for time/size columns, ascending for text).
+type SortDir string
+
+const (
+	SortAsc  SortDir = "asc"
+	SortDesc SortDir = "desc"
+)
+
 // ListQuery parameters for List.
 type ListQuery struct {
 	Q              string // fts5 query string; empty = list by recency
 	Feed           string // exact feed_name match; empty = all feeds
 	EnqueuedFilter EnqueuedFilter
+	SortField      SortField
+	SortDir        SortDir
 	Limit          int // 0 = 100 default
 	Offset         int
 }
@@ -260,9 +286,15 @@ ON CONFLICT(feed_name, guid) DO UPDATE SET
 	return tx.Commit()
 }
 
-// List returns items matching the query. Ordering: bm25 when Q != "", else
-// last_seen_at desc. Limit defaults to 100.
-func (d *DB) List(ctx context.Context, q ListQuery) ([]Item, error) {
+// List returns items matching the query, plus the total count of rows
+// the filter matched (independent of Limit/Offset) so callers can
+// paginate. Limit defaults to 100.
+//
+// Ordering: when q.SortField is set, that column drives the sort with
+// q.SortDir (per-field default applied when empty). Otherwise the
+// default is bm25 (if fts5) → first_seen_at DESC → id ASC, matching
+// the rss feed's natural order.
+func (d *DB) List(ctx context.Context, q ListQuery) ([]Item, int, error) {
 	if q.Limit <= 0 {
 		q.Limit = 100
 	}
@@ -270,22 +302,11 @@ func (d *DB) List(ctx context.Context, q ListQuery) ([]Item, error) {
 		where []string
 		args  []any
 		join  string
-		order string
 	)
 	if q.Q != "" {
 		join = "JOIN items_fts f ON f.rowid = i.id"
 		where = append(where, "items_fts MATCH ?")
 		args = append(args, fts5Query(q.Q))
-		// fts5 hits ranked by relevance first; ties broken by feed order
-		// (newest tick, then RSS position within the tick — see below).
-		order = "bm25(items_fts), i.first_seen_at DESC, i.id ASC"
-	} else {
-		// Default order: mirror the RSS feed. first_seen_at DESC puts items
-		// from later ticks first. Within a tick (same first_seen_at) the
-		// items table id is the insertion order, which matches the RSS XML
-		// order tmgr iterates — so id ASC keeps the feed's natural ranking
-		// (newer-in-feed first because rss publishes newest items first).
-		order = "i.first_seen_at DESC, i.id ASC"
 	}
 	if q.Feed != "" {
 		where = append(where, "i.feed_name = ?")
@@ -307,6 +328,15 @@ func (d *DB) List(ctx context.Context, q ListQuery) ([]Item, error) {
 	if len(where) > 0 {
 		whereSQL = "WHERE " + strings.Join(where, " AND ")
 	}
+
+	// Total count for pagination.
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM items i %s %s", join, whereSQL)
+	var total int
+	if err := d.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count query: %w", err)
+	}
+
+	order := orderClause(q)
 	query := fmt.Sprintf(`
 SELECT i.id, i.feed_name, i.guid, i.title,
        COALESCE(i.link, ''),
@@ -320,7 +350,7 @@ FROM items i %s %s ORDER BY %s LIMIT ? OFFSET ?
 	args = append(args, q.Limit, q.Offset)
 	rows, err := d.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list query: %w", err)
+		return nil, 0, fmt.Errorf("list query: %w", err)
 	}
 	defer rows.Close()
 	var out []Item
@@ -334,14 +364,51 @@ FROM items i %s %s ORDER BY %s LIMIT ? OFFSET ?
 			&first, &last,
 			&it.TotalBytes, &it.FileCount, &it.DirCount,
 			&enqueued, &it.EnqueueSource); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		it.FirstSeenAt = time.Unix(first, 0)
 		it.LastSeenAt = time.Unix(last, 0)
 		it.Enqueued = enqueued == 1
 		out = append(out, it)
 	}
-	return out, rows.Err()
+	return out, total, rows.Err()
+}
+
+// orderClause builds the ORDER BY clause for List. When q.SortField is
+// unset, fall back to the historical default (bm25 first on fts5 hits,
+// then first_seen_at DESC, id ASC for rss-order ties).
+func orderClause(q ListQuery) string {
+	if q.SortField == SortDefault {
+		if q.Q != "" {
+			return "bm25(items_fts), i.first_seen_at DESC, i.id ASC"
+		}
+		return "i.first_seen_at DESC, i.id ASC"
+	}
+	// Per-column default direction: time/size sorts read better as DESC
+	// (newest/biggest first); text sorts read better as ASC.
+	defaultDesc := map[SortField]bool{
+		SortFirstSeen:  true,
+		SortLastSeen:   true,
+		SortTotalBytes: true,
+		SortEnqueued:   true,
+	}
+	dir := strings.ToUpper(string(q.SortDir))
+	if dir != "ASC" && dir != "DESC" {
+		if defaultDesc[q.SortField] {
+			dir = "DESC"
+		} else {
+			dir = "ASC"
+		}
+	}
+	// SortEnqueued is computed in the SELECT — refer to the CASE column
+	// via the same expression in ORDER BY (sqlite can't reference aliases
+	// from the same SELECT level in older versions, so re-emit it).
+	col := "i." + string(q.SortField)
+	if q.SortField == SortEnqueued {
+		col = "(CASE WHEN i.info_hash IS NOT NULL AND EXISTS (SELECT 1 FROM enqueues e WHERE e.info_hash = i.info_hash) THEN 1 ELSE 0 END)"
+	}
+	// Stable tiebreaker on id so identical sort keys keep a deterministic order.
+	return col + " " + dir + ", i.id ASC"
 }
 
 // SetMeta records the parsed-torrent meta for one (feed, guid). Called
@@ -375,7 +442,8 @@ WHERE feed_name = ? AND guid = ?
 
 // Export dumps every row (used for tmgr bootstrap when its local mirror is empty).
 func (d *DB) Export(ctx context.Context) ([]Item, error) {
-	return d.List(ctx, ListQuery{EnqueuedFilter: FilterAll, Limit: 1 << 30})
+	items, _, err := d.List(ctx, ListQuery{EnqueuedFilter: FilterAll, Limit: 1 << 30})
+	return items, err
 }
 
 // RecordEnqueue inserts (or replaces) an enqueues row.

@@ -14,7 +14,7 @@
           hx-get="/api/search"
           hx-trigger="input changed delay:250ms from:input[type=search],
                       change from:select,
-                      change from:input[type=checkbox],
+                      change from:input[type=hidden],
                       load"
           hx-target="#rows" hx-swap="innerHTML">
       <span class="search-input-wrap">
@@ -33,36 +33,57 @@
         <option value="enqueued">enqueued</option>
         <option value="">unenqueued</option>
       </select>
+      <select name="per_page" title="rows per page">
+        <option value="25">25</option>
+        <option value="50" selected>50</option>
+        <option value="100">100</option>
+        <option value="200">200</option>
+        <option value="500">500</option>
+      </select>
+      <!-- hidden state driven by the column headers + pagination buttons.
+           kept in the form so htmx submits them automatically as part of
+           every /api/search request. -->
+      <input type="hidden" name="page" value="1">
+      <input type="hidden" name="sort_field" value="">
+      <input type="hidden" name="sort_dir" value="">
     </form>
   </header>
   <script>
-  // URL <-> filter-form sync. Inline + synchronous so the form is populated
-  // BEFORE htmx's hx-trigger="load" fires the initial search — otherwise
-  // a reload of /?q=foo would briefly search with q="" before the URL was
-  // applied. Reads location.search on load; writes via replaceState on every
-  // form change (no debounce — replaceState is cheap, and we want the bar
-  // to match what the user sees).
+  // URL <-> filter-form sync, header-click sort, and pagination clicks.
+  // Inline + synchronous so the form is populated BEFORE htmx's hx-trigger=
+  // "load" fires the initial search — a reload of /?q=foo&sort_field=title
+  // mustn't briefly search with q=""/no-sort.
+  //
+  // The form holds the full search state (q, feed_filter, enqueued_filter,
+  // per_page, page, sort_field, sort_dir). htmx serialises every input on
+  // each /api/search submit, so we just keep the inputs in sync with what
+  // the user clicked and let htmx do the request.
   (function () {
     var form = document.getElementById('search');
     if (!form) return;
+
+    // 1. Seed inputs from the URL on load.
     var params = new URLSearchParams(location.search);
     if (params.has('q')) form.q.value = params.get('q');
     if (params.has('feed_filter')) form.feed_filter.value = params.get('feed_filter');
-    // enqueued_filter values: "" (unenqueued, server default), "all",
-    // "enqueued". absent from url = keep template-selected option.
-    if (params.has('enqueued_filter')) {
-      form.enqueued_filter.value = params.get('enqueued_filter');
-    }
+    if (params.has('enqueued_filter')) form.enqueued_filter.value = params.get('enqueued_filter');
+    if (params.has('per_page')) form.per_page.value = params.get('per_page');
+    if (params.has('page')) form.page.value = params.get('page');
+    if (params.has('sort_field')) form.sort_field.value = params.get('sort_field');
+    if (params.has('sort_dir')) form.sort_dir.value = params.get('sort_dir');
 
+    // 2. URL ← form. Run on every input/change so the address bar matches
+    //    what the user sees. Always emit the explicit values so a reload
+    //    restores the same view (replaceState is cheap; no debounce).
     function syncURL() {
       var p = new URLSearchParams();
       if (form.q.value) p.set('q', form.q.value);
       if (form.feed_filter.value) p.set('feed_filter', form.feed_filter.value);
-      // emit enqueued_filter explicitly so reloads restore the same view.
-      // empty string ("unenqueued") gets a value to disambiguate from
-      // "not yet set" — the JS reader treats absent params as "use the
-      // current form state", but for the address bar we want to pin it.
       p.set('enqueued_filter', form.enqueued_filter.value);
+      p.set('per_page', form.per_page.value);
+      p.set('page', form.page.value);
+      if (form.sort_field.value) p.set('sort_field', form.sort_field.value);
+      if (form.sort_dir.value) p.set('sort_dir', form.sort_dir.value);
       var qs = p.toString();
       var target = qs ? location.pathname + '?' + qs : location.pathname;
       if (location.pathname + location.search !== target) {
@@ -71,17 +92,94 @@
     }
     form.addEventListener('input', syncURL);
     form.addEventListener('change', syncURL);
+
+    // 3. Filter / per_page / sort changes invalidate the current page —
+    //    snap back to 1 before htmx fires the search request so the user
+    //    never sees an empty result on a now-out-of-range page.
+    function resetPage() { form.page.value = '1'; }
+    ['q', 'feed_filter', 'enqueued_filter', 'per_page', 'sort_field', 'sort_dir'].forEach(function (name) {
+      var el = form.elements[name];
+      if (el) el.addEventListener('change', resetPage);
+    });
+    // q is a search input — input events too (change only fires on blur).
+    form.q.addEventListener('input', resetPage);
+
+    // 4. Sortable column headers. Each <th data-sort="..."> click sets
+    //    sort_field; if the same field is clicked again, flip sort_dir.
+    //    Per-field default direction: time/size columns prefer desc,
+    //    text columns prefer asc — matches what reads naturally.
+    var descByDefault = { first_seen_at: true, last_seen_at: true, total_bytes: true, enqueued: true };
+    function updateSortArrows() {
+      var sf = form.sort_field.value, sd = form.sort_dir.value;
+      document.querySelectorAll('th.sortable').forEach(function (th) {
+        var arrow = th.querySelector('.sort-arrow');
+        if (!arrow) return;
+        if (th.dataset.sort === sf) {
+          arrow.textContent = sd === 'asc' ? '↑' : '↓';
+          th.classList.add('sorted');
+        } else {
+          arrow.textContent = '';
+          th.classList.remove('sorted');
+        }
+      });
+    }
+    updateSortArrows();
+    document.querySelectorAll('th.sortable').forEach(function (th) {
+      th.addEventListener('click', function () {
+        var field = th.dataset.sort;
+        if (form.sort_field.value === field) {
+          form.sort_dir.value = (form.sort_dir.value === 'asc') ? 'desc' : 'asc';
+        } else {
+          form.sort_field.value = field;
+          form.sort_dir.value = descByDefault[field] ? 'desc' : 'asc';
+        }
+        updateSortArrows();
+        // dispatch a synthetic change so htmx + syncURL + resetPage all fire.
+        form.sort_field.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+    });
+
+    // 5. Pagination clicks (event-delegation on the container so newly
+    //    OOB-swapped buttons keep working). Each .page-btn carries
+    //    data-page="<n>" — set the form's page input and dispatch a
+    //    change event on it; the form's hx-trigger picks up hidden-input
+    //    changes and refires the search. We deliberately set page BEFORE
+    //    the resetPage listeners would clobber it; pagination clicks are
+    //    not subject to resetPage (page is the field they're driving).
+    document.addEventListener('click', function (ev) {
+      var btn = ev.target.closest && ev.target.closest('.page-btn');
+      if (!btn || btn.disabled) return;
+      var n = btn.dataset.page;
+      if (!n) return;
+      form.page.value = n;
+      syncURL();
+      form.page.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    // 6. Refresh sort arrows after each rows swap (in case the user
+    //    reloaded a page with an explicit sort and the arrows need to
+    //    re-render against the seeded form state).
+    document.body.addEventListener('htmx:afterSwap', function (ev) {
+      if (ev.target && (ev.target.id === 'rows' || ev.target.id === 'pagination')) {
+        updateSortArrows();
+      }
+    });
   })();
   </script>
   <main>
     <table>
       <thead>
-        <tr><th>feed · first seen</th><th>title</th><th>status</th></tr>
+        <tr>
+          <th data-sort="first_seen_at" class="sortable" title="sort by first seen">feed · first seen <span class="sort-arrow"></span></th>
+          <th data-sort="title" class="sortable" title="sort by title">title <span class="sort-arrow"></span></th>
+          <th data-sort="enqueued" class="sortable" title="sort by enqueue state">status <span class="sort-arrow"></span></th>
+        </tr>
       </thead>
       <tbody id="rows">
         <tr><td colspan="3" class="empty">loading…</td></tr>
       </tbody>
     </table>
+    <div id="pagination"></div>
   </main>
   <div id="modal"></div>
   <script>

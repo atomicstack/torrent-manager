@@ -43,6 +43,8 @@ type ItemsQuery struct {
 	Q              string
 	Feed           string
 	EnqueuedFilter itemsdb.EnqueuedFilter
+	SortField      itemsdb.SortField
+	SortDir        itemsdb.SortDir
 	Limit          int
 	Offset         int
 }
@@ -83,6 +85,12 @@ func (s *Seedctl) ListItems(ctx context.Context, q ItemsQuery) (api.ItemsListRes
 	}
 	if q.EnqueuedFilter != "" {
 		values.Set("enqueued_filter", string(q.EnqueuedFilter))
+	}
+	if q.SortField != "" {
+		values.Set("sort_field", string(q.SortField))
+	}
+	if q.SortDir != "" {
+		values.Set("sort_dir", string(q.SortDir))
 	}
 	if q.Limit > 0 {
 		values.Set("limit", strconv.Itoa(q.Limit))

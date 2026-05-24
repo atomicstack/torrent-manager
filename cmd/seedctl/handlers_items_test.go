@@ -38,7 +38,7 @@ func TestUpsertItems_PersistsRows(t *testing.T) {
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, httptest.NewRequest("POST", "/v1/items", bytes.NewReader(body)))
 	require.Equal(t, http.StatusOK, rr.Code)
-	got, err := db.List(context.Background(), itemsdb.ListQuery{EnqueuedFilter: itemsdb.FilterAll, Limit: 10})
+	got, _, err := db.List(context.Background(), itemsdb.ListQuery{EnqueuedFilter: itemsdb.FilterAll, Limit: 10})
 	require.NoError(t, err)
 	assert.Len(t, got, 2)
 }
@@ -90,7 +90,7 @@ func TestPostTorrent_RecordsEnqueue(t *testing.T) {
 	h.ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code)
 
-	rows, err := db.List(context.Background(), itemsdb.ListQuery{EnqueuedFilter: itemsdb.FilterAll, Limit: 10})
+	rows, _, err := db.List(context.Background(), itemsdb.ListQuery{EnqueuedFilter: itemsdb.FilterAll, Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	assert.True(t, rows[0].Enqueued)

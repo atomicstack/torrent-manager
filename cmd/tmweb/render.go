@@ -35,6 +35,7 @@ var funcMap = template.FuncMap{
 type renderer struct {
 	layout        *template.Template
 	rows          *template.Template
+	pagination    *template.Template
 	confirm       *template.Template
 	confirmNoRule *template.Template
 	// enqueueFormRow is the small fragment GET /api/enqueue-classify returns
@@ -60,6 +61,10 @@ func newRenderer() (*renderer, error) {
 	rows, err := template.New("_rows.html").Funcs(funcMap).ParseFS(templatesFS, "templates/_rows.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse rows: %w", err)
+	}
+	pagination, err := template.New("_pagination.html").Funcs(funcMap).ParseFS(templatesFS, "templates/_pagination.html")
+	if err != nil {
+		return nil, fmt.Errorf("parse pagination: %w", err)
 	}
 	// Both modal templates embed _enqueue_progress.html (the in-flight
 	// shimmer + step list). The no-rule modal additionally embeds
@@ -97,6 +102,7 @@ func newRenderer() (*renderer, error) {
 	return &renderer{
 		layout:         layout,
 		rows:           rows,
+		pagination:     pagination,
 		confirm:        confirm,
 		confirmNoRule:  confirmNoRule,
 		enqueueFormRow: enqueueFormRow,
