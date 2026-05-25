@@ -41,11 +41,47 @@
       <input type="hidden" name="sort_dir" value="">
     </form>
   </header>
+  <main>
+    <table>
+      <thead>
+        <tr>
+          <th data-sort="first_seen_at" class="sortable" title="sort by first seen">feed · first seen <span class="sort-arrow"></span></th>
+          <th data-sort="title" class="sortable" title="sort by title">title <span class="sort-arrow"></span></th>
+          <th data-sort="enqueued" class="sortable" title="sort by enqueue state">status <span class="sort-arrow"></span></th>
+        </tr>
+      </thead>
+      <tbody id="rows">
+        <tr><td colspan="3" class="empty">loading…</td></tr>
+      </tbody>
+    </table>
+    <div class="pagination-bar">
+      <!-- #pagination is OOB-swapped by /api/search responses. -->
+      <div id="pagination"></div>
+      <!-- per_page belongs to the search form (form="search") so htmx
+           serialises it on submit even though it lives outside the
+           form's DOM subtree, where it visually sits next to the
+           pagination controls. -->
+      <label class="per-page-label">
+        rows / page
+        <select name="per_page" form="search" title="rows per page">
+          <option value="25">25</option>
+          <option value="50" selected>50</option>
+          <option value="100">100</option>
+          <option value="200">200</option>
+          <option value="500">500</option>
+        </select>
+      </label>
+    </div>
+  </main>
   <script>
   // URL <-> filter-form sync, header-click sort, and pagination clicks.
-  // Inline + synchronous so the form is populated BEFORE htmx's hx-trigger=
-  // "load" fires the initial search — a reload of /?q=foo&sort_field=title
-  // mustn't briefly search with q=""/no-sort.
+  // This script lives AFTER </main> on purpose: it references elements that
+  // appear later in the document (the th.sortable headers, the per_page
+  // <select form="search"> that lives outside the form's DOM subtree). It's
+  // still inline + synchronous so the form is populated BEFORE htmx's
+  // hx-trigger="load" fires the initial search on DOMContentLoaded — a
+  // reload of /?q=foo&sort_field=title mustn't briefly search with
+  // q=""/no-sort.
   //
   // The form holds the full search state (q, feed_filter, enqueued_filter,
   // per_page, page, sort_field, sort_dir). htmx serialises every input on
@@ -172,38 +208,6 @@
     });
   })();
   </script>
-  <main>
-    <table>
-      <thead>
-        <tr>
-          <th data-sort="first_seen_at" class="sortable" title="sort by first seen">feed · first seen <span class="sort-arrow"></span></th>
-          <th data-sort="title" class="sortable" title="sort by title">title <span class="sort-arrow"></span></th>
-          <th data-sort="enqueued" class="sortable" title="sort by enqueue state">status <span class="sort-arrow"></span></th>
-        </tr>
-      </thead>
-      <tbody id="rows">
-        <tr><td colspan="3" class="empty">loading…</td></tr>
-      </tbody>
-    </table>
-    <div class="pagination-bar">
-      <!-- #pagination is OOB-swapped by /api/search responses. -->
-      <div id="pagination"></div>
-      <!-- per_page belongs to the search form (form="search") so htmx
-           serialises it on submit even though it lives outside the
-           form's DOM subtree, where it visually sits next to the
-           pagination controls. -->
-      <label class="per-page-label">
-        rows / page
-        <select name="per_page" form="search" title="rows per page">
-          <option value="25">25</option>
-          <option value="50" selected>50</option>
-          <option value="100">100</option>
-          <option value="200">200</option>
-          <option value="500">500</option>
-        </select>
-      </label>
-    </div>
-  </main>
   <div id="modal"></div>
   <script>
   // rewrite the timestamp tooltips into the browser's local timezone so the

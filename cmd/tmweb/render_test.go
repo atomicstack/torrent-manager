@@ -48,6 +48,31 @@ func TestRenderLayout_HasURLSyncScript(t *testing.T) {
 	assert.Contains(t, body, `<option value="">unenqueued</option>`)
 }
 
+// TestRenderLayout_URLSyncScriptComesAfterPerPageSelect pins the ordering
+// invariant: the inline form-sync script touches form.elements.per_page, so
+// the <select name="per_page" form="search"> element MUST be in the DOM
+// before the script runs. The script is inline + synchronous, so document
+// order is the only thing keeping the per_page element from being undefined
+// when the script tries to wire up its change listener.
+//
+// If this test fails, the script will throw TypeError at load time,
+// silently killing pagination clicks, sort-header bindings, and per_page
+// URL seeding — exactly the regression we saw after the per_page select
+// was moved out of the search bar into the pagination bar.
+func TestRenderLayout_URLSyncScriptComesAfterPerPageSelect(t *testing.T) {
+	r, err := newRenderer()
+	require.NoError(t, err)
+	var buf bytes.Buffer
+	require.NoError(t, r.layout.Execute(&buf, struct{ Feeds []string }{Feeds: []string{"TrackerA (TV)"}}))
+	body := buf.String()
+	selectIdx := bytes.Index([]byte(body), []byte(`<select name="per_page"`))
+	scriptIdx := bytes.Index([]byte(body), []byte("form.elements.per_page"))
+	require.NotEqual(t, -1, selectIdx, "per_page select must exist in the layout")
+	require.NotEqual(t, -1, scriptIdx, "form-sync script must reference form.elements.per_page")
+	assert.Less(t, selectIdx, scriptIdx,
+		"per_page <select> must be parsed BEFORE the script that wires its change listener")
+}
+
 // TestRenderRows_EmptyShowsPlaceholder ensures the "no matches" row is
 // rendered when the upstream returns zero items, so the table doesn't get
 // stuck on "loading…" after a search.
