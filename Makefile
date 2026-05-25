@@ -52,7 +52,7 @@ image-import: image-local ## scp dist/tmgr-image.tar and import on each k3s node
 	@for h in $(K3S_NODES); do \
 	  echo "==> $$h"; \
 	  scp -q dist/tmgr-image.tar matt@$$h:/tmp/tmgr-image.tar && \
-	  ssh -t matt@$$h "sudo /usr/local/bin/k3s ctr images import /tmp/tmgr-image.tar"; \
+	  ssh matt@$$h "sudo /usr/local/bin/k3s ctr images import /tmp/tmgr-image.tar"; \
 	done
 
 image-local-tmweb: ## build tmweb arm64 image into dist/tmweb-image.tar (podman)
@@ -64,7 +64,7 @@ image-import-tmweb: image-local-tmweb ## scp dist/tmweb-image.tar and import on 
 	@for h in $(K3S_NODES); do \
 	  echo "==> $$h"; \
 	  scp -q dist/tmweb-image.tar matt@$$h:/tmp/tmweb-image.tar && \
-	  ssh -t matt@$$h "sudo /usr/local/bin/k3s ctr images import /tmp/tmweb-image.tar"; \
+	  ssh matt@$$h "sudo /usr/local/bin/k3s ctr images import /tmp/tmweb-image.tar"; \
 	done
 
 deploy: ## apply k8s manifests
