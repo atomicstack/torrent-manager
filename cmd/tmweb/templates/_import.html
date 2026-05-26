@@ -1,0 +1,33 @@
+<div class="modal-bg" hx-on:click="document.getElementById('modal').innerHTML=''">
+  <div class="modal-card" onclick="event.stopPropagation()">
+    <h2>import torrent</h2>
+    <p class="modal-note">paste a torrent url + pick a feed. tmweb fetches + parses it, registers an items row, then opens the standard enqueue modal so you can review the save dir.</p>
+    {{if .ErrorMsg}}<p class="modal-error">{{.ErrorMsg}}</p>{{end}}
+    <form hx-post="/api/import" hx-target="#modal" hx-swap="innerHTML">
+      <div class="form-row-block">
+        <label class="form-row">
+          <span>url</span>
+          <span class="path-input-wrap">
+            <input type="url" name="url" value="{{.URL}}" required
+                   placeholder="https://…/.torrent" autocomplete="off" spellcheck="false">
+          </span>
+        </label>
+        <label class="form-row">
+          <span>feed</span>
+          <select name="feed" required>
+            <option value="" {{if not .SelectedFeed}}selected{{end}}>— pick a feed —</option>
+            {{range .Feeds}}
+            <option value="{{.}}"{{if eq . $.SelectedFeed}} selected{{end}}>{{.}}</option>
+            {{end}}
+          </select>
+        </label>
+      </div>
+      {{template "_import_progress.html" .}}
+      <div class="modal-actions">
+        <button type="button" class="btn-cancel"
+                hx-on:click="document.getElementById('modal').innerHTML=''">cancel</button>
+        <button type="submit" class="btn-primary">fetch &amp; import</button>
+      </div>
+    </form>
+  </div>
+</div>

@@ -207,6 +207,34 @@ func (s *Seedctl) SetItemMeta(ctx context.Context, req api.ItemMetaRequest) erro
 	return nil
 }
 
+// UpsertItems calls POST /v1/items with a batch of item records. Used by
+// the manual-import flow to register a torrent the user pasted in by url.
+// The (feed_name, guid) uniqueness constraint on seedctl side makes this
+// idempotent — re-posting the same item is a no-op apart from updating
+// last_seen_at.
+func (s *Seedctl) UpsertItems(ctx context.Context, items []api.ItemRecord) error {
+	u := s.base + "/v1/items"
+	body, err := json.Marshal(api.ItemsUpsertRequest{Items: items})
+	if err != nil {
+		return fmt.Errorf("seedctl POST %s: marshal: %w", u, err)
+	}
+	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("seedctl POST %s: build request: %w", u, err)
+	}
+	hreq.Header.Set("Content-Type", "application/json")
+	resp, err := s.hc.Do(hreq)
+	if err != nil {
+		return fmt.Errorf("seedctl POST %s: %w", u, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return fmt.Errorf("seedctl POST %s: status %d", u, resp.StatusCode)
+	}
+	return nil
+}
+
 // PostTorrent uploads a .torrent body to POST /v1/torrents. The body is sent
 // as-is (no gzip): .torrent files are already binary/opaque-to-deflate, so
 // compression would inflate rather than shrink. The info hash and save dir

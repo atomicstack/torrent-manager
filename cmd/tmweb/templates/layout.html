@@ -9,7 +9,9 @@
 </head>
 <body>
   <header>
-    <h1>torrents</h1>
+    <h1>torrents <a href="#" class="header-action"
+        hx-get="/api/import-form" hx-target="#modal" hx-swap="innerHTML"
+        onclick="event.preventDefault()">import torrent</a></h1>
     <form id="search" class="search-bar"
           hx-get="/api/search"
           hx-trigger="input changed delay:250ms from:input[type=search],

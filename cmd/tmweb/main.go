@@ -349,6 +349,8 @@ func newMux(
 	mux.HandleFunc("GET /api/enqueue-confirm", h.enqueueConfirm)
 	mux.HandleFunc("GET /api/enqueue-classify", h.enqueueClassify)
 	mux.HandleFunc("POST /api/enqueue", h.enqueueDo)
+	mux.HandleFunc("GET /api/import-form", h.importForm)
+	mux.HandleFunc("POST /api/import", h.importDo)
 	mux.Handle("GET /static/", staticHandler())
 	return mux
 }

@@ -40,6 +40,7 @@ type renderer struct {
 	pagination    *template.Template
 	confirm       *template.Template
 	confirmNoRule *template.Template
+	importModal   *template.Template
 	// enqueueFormRow is the small fragment GET /api/enqueue-classify returns
 	// to outerHTML-swap the .form-row-block inside the open modal when the
 	// user clicks the ✨ claude icon.
@@ -96,6 +97,16 @@ func newRenderer() (*renderer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse enqueue_form_row: %w", err)
 	}
+	// importModal renders the "import torrent" modal triggered by the
+	// header link. Shares the .enqueue-progress shimmer + step list with
+	// the regular enqueue flow via _import_progress.html.
+	importModal, err := template.New("_import.html").Funcs(funcMap).
+		ParseFS(templatesFS,
+			"templates/_import.html",
+			"templates/_import_progress.html")
+	if err != nil {
+		return nil, fmt.Errorf("parse import: %w", err)
+	}
 	torrentMeta, err := template.New("_torrent_meta.html").Funcs(funcMap).
 		ParseFS(templatesFS, "templates/_torrent_meta.html")
 	if err != nil {
@@ -109,6 +120,7 @@ func newRenderer() (*renderer, error) {
 		confirmNoRule:  confirmNoRule,
 		enqueueFormRow: enqueueFormRow,
 		torrentMeta:    torrentMeta,
+		importModal:    importModal,
 	}, nil
 }
 
