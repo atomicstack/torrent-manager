@@ -43,15 +43,26 @@
   </header>
   <main>
     <table>
+      <!-- explicit column widths keep the layout stable across pages so the
+           title column doesn't shift left/right as feed/status content
+           changes length between renders. table-layout:fixed in app.css
+           makes the colgroup widths authoritative. -->
+      <colgroup>
+        <col class="col-feed">
+        <col class="col-seen">
+        <col class="col-status">
+        <col class="col-title">
+      </colgroup>
       <thead>
         <tr>
-          <th data-sort="first_seen_at" class="sortable" title="sort by first seen">feed · first seen <span class="sort-arrow"></span></th>
-          <th data-sort="title" class="sortable" title="sort by title">title <span class="sort-arrow"></span></th>
+          <th data-sort="feed_name" class="sortable" title="sort by feed">feed <span class="sort-arrow"></span></th>
+          <th data-sort="first_seen_at" class="sortable" title="sort by first seen">first seen <span class="sort-arrow"></span></th>
           <th data-sort="enqueued" class="sortable" title="sort by enqueue state">status <span class="sort-arrow"></span></th>
+          <th data-sort="title" class="sortable" title="sort by title">title <span class="sort-arrow"></span></th>
         </tr>
       </thead>
       <tbody id="rows">
-        <tr><td colspan="3" class="empty">loading…</td></tr>
+        <tr><td colspan="4" class="empty">loading…</td></tr>
       </tbody>
     </table>
     <div class="pagination-bar">

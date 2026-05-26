@@ -1,23 +1,20 @@
 {{if not .Items}}
-<tr><td colspan="3" class="empty">no matches</td></tr>
+<tr><td colspan="4" class="empty">no matches</td></tr>
 {{end}}
 {{range .Items}}
 <tr data-feed="{{.FeedName}}" data-guid="{{.GUID}}" data-hash="{{.InfoHash}}">
-  <td class="cell-meta">
-    <span class="cell-feed">{{.FeedName}}</span>
-    <span class="cell-meta-sep">·</span>
-    <span class="cell-seen" data-ts="{{.FirstSeenAt}}" title="{{iso .FirstSeenAt}}">{{ago .FirstSeenAt}}</span>
+  <td class="cell-feed">{{.FeedName}}</td>
+  <td class="cell-seen" data-ts="{{.FirstSeenAt}}" title="{{iso .FirstSeenAt}}">{{ago .FirstSeenAt}}</td>
+  <td class="cell-status">
+    {{if .Enqueued}}
+      <span class="badge badge-enqueued">enqueued</span>
+    {{end}}
   </td>
   <td class="cell-title">
     <a class="cell-title-link" href="#"
        hx-get="/api/enqueue-confirm?feed={{.FeedName | urlquery}}&guid={{.GUID | urlquery}}"
        hx-target="#modal" hx-swap="innerHTML"
        onclick="event.preventDefault()">{{.Title}}</a>
-  </td>
-  <td class="cell-status">
-    {{if .Enqueued}}
-      <span class="badge badge-enqueued">enqueued</span>
-    {{end}}
   </td>
 </tr>
 {{end}}

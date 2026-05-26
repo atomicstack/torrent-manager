@@ -95,7 +95,17 @@ main { padding: 1rem; }
 table {
   width: 100%;
   border-collapse: collapse;
+  /* fixed layout makes the colgroup widths authoritative so the title
+     column doesn't shift left/right between pages as the rendered feed
+     name or status badge text changes length. */
+  table-layout: fixed;
 }
+
+/* per-column widths declared on <col> elements in layout.html. the title
+   column has no explicit width so it absorbs all remaining space. */
+.col-feed   { width: 11rem; }
+.col-seen   { width: 7rem; }
+.col-status { width: 7rem; }
 
 th, td {
   padding: 0.4rem 0.5rem;
@@ -184,20 +194,18 @@ th.sortable .sort-arrow {
 
 .cell-title a:hover { text-decoration: underline; }
 
-/* feed name + relative timestamp share one line in every row card. */
-.cell-meta {
-  display: flex;
-  gap: 0.4rem;
-  align-items: baseline;
+/* feed + first-seen now occupy their own fixed-width columns instead of
+   sharing one cell. shared muted/lowercase styling lives here so both
+   cells read as secondary metadata next to the title. */
+.cell-feed,
+.cell-seen {
   font-size: 0.75rem;
   text-transform: lowercase;
   color: var(--muted);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-
-.cell-meta-sep { opacity: 0.5; }
-
-.cell-seen { white-space: nowrap; }
 
 .badge {
   font-size: 0.75rem;
