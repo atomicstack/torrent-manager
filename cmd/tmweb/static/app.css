@@ -103,9 +103,13 @@ table {
 
 /* per-column widths declared on <col> elements in layout.html. the title
    column has no explicit width so it absorbs all remaining space. */
-.col-feed   { width: 11rem; }
-.col-seen   { width: 7rem; }
-.col-status { width: 7rem; }
+/* widest feed in practice is "trackerb (movies)" — ~15 lowercase chars at
+   0.75rem. first-seen tops out at strings like "10mo ago" (~8 chars).
+   sized to those + a small comfort margin so the title starts close to
+   the metadata rather than across the page. */
+.col-feed   { width: 8rem; }
+.col-seen   { width: 5rem; }
+.col-status { width: 6rem; }
 
 th, td {
   padding: 0.4rem 0.5rem;
