@@ -3,6 +3,7 @@
 /bin/
 /seedctl
 /tmgr
+/tmweb
 
 # secrets, certs (NEVER commit private keys)
 /certs/*

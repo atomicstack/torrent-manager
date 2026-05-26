@@ -107,8 +107,8 @@ if you don't need the ai fallback (most installs won't), skip creating this secr
 
 ```
 mkdir -p private/
-scp seedbox@tiny:<path>/share/users/<seedbox-user>/settings/rss/cache/info     private/
-scp seedbox@tiny:<path>/share/users/<seedbox-user>/settings/rss/cache/filters  private/
+scp seedbox@seedbox.example.com:<path>/share/users/<seedbox-user>/settings/rss/cache/info     private/
+scp seedbox@seedbox.example.com:<path>/share/users/<seedbox-user>/settings/rss/cache/filters  private/
 scripts/migrate-rutorrent.py private/ > /tmp/watchlist.yaml
 # review /tmp/watchlist.yaml; passkey-bearing urls are visible — don't paste anywhere public
 # each feed entry has a commented-out cookie_env hint — uncomment and set the env var name
