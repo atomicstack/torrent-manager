@@ -43,6 +43,11 @@ import (
 	"github.com/atomicstack/torrent-manager/internal/watchlist"
 )
 
+// defaultPerPage is the rows-per-page fallback applied whenever the client
+// doesn't send (or sends a non-positive) per_page value. Mirrored by the
+// "selected" option in layout.html's per_page <select>.
+const defaultPerPage = 25
+
 func main() {
 	listenAddr := flag.String("listen", ":8080", "http listen address (lan-only, no tls)")
 	seedctlURL := flag.String("seedctl-url", "https://seedbox.example.com:18443", "seedctl base url")
@@ -373,7 +378,7 @@ func (h *handler) search(w http.ResponseWriter, req *http.Request) {
 	}
 	perPage, _ := strconv.Atoi(q.Get("per_page"))
 	if perPage <= 0 {
-		perPage = 50
+		perPage = defaultPerPage
 	}
 	h.renderRows(w, req.Context(), ItemsQuery{
 		Q:              q.Get("q"),
@@ -449,7 +454,7 @@ type paginationData struct {
 
 func newPaginationData(total, page, perPage int) paginationData {
 	if perPage <= 0 {
-		perPage = 50
+		perPage = defaultPerPage
 	}
 	if page < 1 {
 		page = 1
@@ -1017,7 +1022,7 @@ func (h *handler) enqueueDo(w http.ResponseWriter, req *http.Request) {
 	}
 	perPage, _ := strconv.Atoi(req.PostForm.Get("per_page"))
 	if perPage <= 0 {
-		perPage = 50
+		perPage = defaultPerPage
 	}
 	h.renderRows(w, req.Context(), ItemsQuery{
 		Q:              req.PostForm.Get("q"),
