@@ -514,15 +514,30 @@ form.htmx-request .step-list .step-3.step::before {
   100% { left: 100%; }
 }
 
-/* mobile card layout */
+/* mobile card layout. row becomes a flex container so feed/seen/status
+   sit on one line (each as a compact chip-sized flex item) while the
+   title cell forces a wrap to its own full-width row below. colgroup
+   widths are ignored once table-layout falls back to block-ish flex. */
 @media (max-width: 600px) {
-  table, thead, tbody, tr, td, th { display: block; }
+  table, thead, tbody, td, th { display: block; }
   thead { display: none; }
   tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: 0.6rem;
+    row-gap: 0.2rem;
     margin-bottom: 1rem;
     padding: 0.5rem;
     border: 1px solid var(--border);
     border-radius: 4px;
   }
-  td { border: none; padding: 0.2rem 0; }
+  td { border: none; padding: 0; }
+  /* the three metadata cells share one line; title takes the next. */
+  .cell-feed,
+  .cell-seen,
+  .cell-status { flex: 0 0 auto; }
+  .cell-title  { flex: 1 0 100%; }
+  /* loading… / no-matches placeholders should fill the row. */
+  .empty       { flex: 1 0 100%; text-align: center; }
 }
