@@ -1,5 +1,17 @@
 .PHONY: help build build-tmgr build-seedctl build-tmweb test test-integration lint certs image image-local image-import image-local-tmweb image-import-tmweb push deploy deploy-seedhost install-mdns clean
 
+# Local overrides for hostnames + image registry. Keep your real seedbox /
+# cluster names out of the committed Makefile — drop them into Makefile.local
+# (gitignored), e.g.
+#
+#   SEEDCTL_HOST = tiny.example.com
+#   K3S_NODES    = node-a.local node-b.local
+#   MDNS_NODE    = node-a.local
+#
+# The include is non-fatal (`-include`) so a missing file just falls through
+# to the placeholder defaults below.
+-include Makefile.local
+
 SEEDCTL_HOST ?= tiny.example.com
 IMAGE ?= ghcr.io/atomicstack/tmgr
 TAG ?= dev

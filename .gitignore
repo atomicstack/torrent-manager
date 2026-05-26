@@ -5,6 +5,9 @@
 /tmgr
 /tmweb
 
+# local makefile overrides (real hostnames, registries) — kept out of git
+/Makefile.local
+
 # secrets, certs (NEVER commit private keys)
 /certs/*
 !/certs/.gitignore
