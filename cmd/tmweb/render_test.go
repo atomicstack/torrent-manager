@@ -166,6 +166,15 @@ func TestHumanAgo_RelativeBuckets(t *testing.T) {
 	assert.Equal(t, "5m ago", humanAgo(now-5*60))
 	assert.Equal(t, "3h ago", humanAgo(now-3*3600))
 	assert.Equal(t, "2d ago", humanAgo(now-2*86400))
+	// once a torrent is older than 365 days, switch to a years bucket
+	// with one decimal place. integer-valued years drop the decimal and
+	// use the singular "year" when exactly 1.
+	assert.Equal(t, "364d ago", humanAgo(now-364*86400), "still in days bucket below the year threshold")
+	assert.Equal(t, "1 year ago", humanAgo(now-365*86400), "365d hits the year bucket, singular")
+	assert.Equal(t, "1.5 years ago", humanAgo(now-547*86400), "~1.498 rounds to 1.5")
+	assert.Equal(t, "1.9 years ago", humanAgo(now-693*86400), "~1.898 rounds to 1.9")
+	assert.Equal(t, "3.5 years ago", humanAgo(now-1278*86400), "~3.501 rounds to 3.5")
+	assert.Equal(t, "2 years ago", humanAgo(now-730*86400), "exact integer year uses plural without decimal")
 	assert.Equal(t, "?", humanAgo(0))
 	assert.Equal(t, "?", humanAgo(now+60)) // future
 }

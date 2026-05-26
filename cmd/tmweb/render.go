@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"html/template"
 	"io/fs"
+	"math"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -112,8 +114,9 @@ func newRenderer() (*renderer, error) {
 
 // humanAgo returns a coarse human-readable relative time given a unix-seconds
 // timestamp. Returns "just now" for deltas < 60s, "?" for zero or future
-// timestamps. We deliberately don't bother with i18n / months / years —
-// the rss item index is short-lived (days, not months).
+// timestamps. Buckets: minutes, hours, days, then years past 365d (with
+// one decimal place; integer-valued years drop the decimal and switch
+// to the singular "year" when the value is exactly 1).
 func humanAgo(ts int64) string {
 	if ts == 0 {
 		return "?"
@@ -129,8 +132,24 @@ func humanAgo(ts int64) string {
 		return fmt.Sprintf("%dm ago", int(d.Minutes()))
 	case d < 24*time.Hour:
 		return fmt.Sprintf("%dh ago", int(d.Hours()))
-	default:
+	case d < 365*24*time.Hour:
 		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	default:
+		// round to one decimal place. integer-valued years (1.0, 2.0, …)
+		// render without the trailing ".0" — "1 year ago" / "2 years ago"
+		// reads cleaner than "1.0 year ago".
+		y := math.Round(float64(d)/float64(365*24*time.Hour)*10) / 10
+		var num string
+		if y == math.Trunc(y) {
+			num = strconv.Itoa(int(y))
+		} else {
+			num = strconv.FormatFloat(y, 'f', 1, 64)
+		}
+		unit := "years"
+		if y == 1 {
+			unit = "year"
+		}
+		return num + " " + unit + " ago"
 	}
 }
 
