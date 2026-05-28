@@ -12,14 +12,107 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/anacrolix/torrent/bencode"
+	"github.com/anacrolix/torrent/metainfo"
 	"github.com/atomicstack/torrent-manager/internal/api"
 	"github.com/atomicstack/torrent-manager/internal/feed"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestRun_PostItemMeta_RowExistsBeforeMetaUpdate pins the ordering invariant
+// that meta-update calls (POST /v1/items/meta) must arrive AFTER the per-tick
+// rss-snapshot upsert (POST /v1/items) for the matching item, otherwise the
+// seedctl UPDATE finds zero rows and silently no-ops — the bug that left
+// taskmaster s05e04 with NULL total_bytes / file_count / dir_count in items.db
+// after the 2026-05-28 02:30 auto-enqueue, and the subsequent cache_hit fast
+// path means it's never retried.
+func TestRun_PostItemMeta_RowExistsBeforeMetaUpdate(t *testing.T) {
+	feedXMLRaw, err := os.ReadFile("../../internal/feed/testdata/valid.xml")
+	require.NoError(t, err)
+
+	// build a real .torrent payload so torrent.Parse in processItem succeeds
+	// and the postItemMeta branch actually runs.
+	info := metainfo.Info{
+		PieceLength: 16384,
+		Pieces:      make([]byte, 20),
+		Name:        "Severance.S02E01.1080p.WEB-DL.mkv",
+		Length:      123_456_789,
+	}
+	infoBytes, err := bencode.Marshal(info)
+	require.NoError(t, err)
+	torrentBytes, err := bencode.Marshal(metainfo.MetaInfo{InfoBytes: infoBytes})
+	require.NoError(t, err)
+
+	var feedSrvURL string
+	feedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".torrent") {
+			w.Header().Set("Content-Type", "application/x-bittorrent")
+			_, _ = w.Write(torrentBytes)
+			return
+		}
+		rewritten := strings.ReplaceAll(string(feedXMLRaw),
+			"https://tracker.example/torrent/dl/",
+			feedSrvURL+"/dl/")
+		_, _ = w.Write([]byte(rewritten))
+	}))
+	defer feedSrv.Close()
+	feedSrvURL = feedSrv.URL
+
+	var (
+		mu               sync.Mutex
+		gotItemsUpsert   bool
+		metaSeenBeforeItems bool
+		metaCalls        int
+	)
+	seedctl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/v1/torrents/"):
+			http.Error(w, "nf", 404)
+		case r.Method == "POST" && r.URL.Path == "/v1/torrents":
+			_, _ = w.Write([]byte(`{"info_hash":"AABBCCDDEEFF00112233445566778899AABBCCDD","added":true}`))
+		case r.Method == "POST" && r.URL.Path == "/v1/items":
+			mu.Lock()
+			gotItemsUpsert = true
+			mu.Unlock()
+			w.WriteHeader(200)
+		case r.Method == "POST" && r.URL.Path == "/v1/items/meta":
+			mu.Lock()
+			if !gotItemsUpsert {
+				metaSeenBeforeItems = true
+			}
+			metaCalls++
+			mu.Unlock()
+			w.WriteHeader(204)
+		default:
+			http.Error(w, "bad", 400)
+		}
+	}))
+	defer seedctl.Close()
+
+	cfg := Config{
+		SeedctlURL: seedctl.URL,
+		Feeds:      []Feed{{Name: "test-feed-a", URL: feedSrv.URL}},
+		Roots:      Roots{TV: "/tv-root"},
+		Shows: []feed.ShowRule{
+			{Name: "severance", Regex: regexp.MustCompile(`(?i)Severance.*1080p`), Category: "tv", Directory: "severance"},
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	res, err := Run(ctx, cfg, &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}})
+	require.NoError(t, err)
+	require.Equal(t, 1, res.Added, "expected the matched item to be enqueued")
+	require.Equal(t, 1, metaCalls, "post_item_meta should have been called once for the matched item")
+	assert.False(t, metaSeenBeforeItems,
+		"items meta-update arrived BEFORE the items upsert — the UPDATE will hit zero rows and the row stays meta-less")
+}
 
 // TestRun_HappyPath builds a fake rss server and a fake seedctl, points Run()
 // at them, and asserts: matched item is POSTed, unmatched is skipped, dedup

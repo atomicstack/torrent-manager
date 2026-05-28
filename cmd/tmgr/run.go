@@ -151,6 +151,23 @@ func Run(ctx context.Context, cfg Config, hc *http.Client) (RunResult, error) {
 	records := make([]api.ItemRecord, 0, 256)
 	tickNow := time.Now().Unix()
 
+	// two-pass per tick. pass 1 fetches every feed, builds the records[] for
+	// the bulk upsert, and collects the matched items into pending[]. pass 2
+	// (after the upsert lands) calls processItem for each pending entry.
+	// the two-pass ordering is load-bearing: processItem ends in postItemMeta
+	// which is an UPDATE on items by (feed_name, guid). if the row doesn't
+	// exist yet, the UPDATE silently affects zero rows and the items.db row
+	// stays meta-less for the lifetime of the local hashcache fast-path,
+	// which short-circuits every subsequent tick before re-fetching the
+	// .torrent. that's the bug that left taskmaster s05e04 (and friends)
+	// without total_bytes / file_count / dir_count after auto-enqueue.
+	type pendingItem struct {
+		feedLabel, feedCookie string
+		it                    feed.Item
+		rule                  feed.ShowRule
+	}
+	pending := make([]pendingItem, 0, 32)
+
 	for _, f := range cfg.Feeds {
 		feedLabel := f.Name
 		if feedLabel == "" {
@@ -206,18 +223,29 @@ func Run(ctx context.Context, cfg Config, hc *http.Client) (RunResult, error) {
 			slog.Info("item_matched",
 				"feed", feedLabel, "title", it.Title,
 				"rule", rule.Name, "hash_from_feed", hashFromFeed)
-			if err := processItem(ctx, cfg, hc, feedLabel, f.Cookie, it, rule, &r); err != nil {
-				slog.Error("process_item", "title", it.Title, "err", err)
-				r.Errors++
-			}
+			pending = append(pending, pendingItem{
+				feedLabel:  feedLabel,
+				feedCookie: f.Cookie,
+				it:         it,
+				rule:       rule,
+			})
 		}
 	}
 
-	// upload per-tick rss snapshot to seedctl. failures must not abort the run.
+	// upload per-tick rss snapshot to seedctl BEFORE processing matched items.
+	// failures must not abort the run — we still try processItem so the actual
+	// rtorrent enqueue isn't blocked by a transient seedctl items-table glitch.
 	if err := postItems(ctx, hc, cfg.SeedctlURL, records); err != nil {
 		slog.Warn("items_upsert_failed", "count", len(records), "err", err)
 	} else if len(records) > 0 {
 		slog.Info("items_upsert", "count", len(records))
+	}
+
+	for _, p := range pending {
+		if err := processItem(ctx, cfg, hc, p.feedLabel, p.feedCookie, p.it, p.rule, &r); err != nil {
+			slog.Error("process_item", "title", p.it.Title, "err", err)
+			r.Errors++
+		}
 	}
 
 	slog.Info("run_summary",
