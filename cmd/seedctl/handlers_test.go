@@ -3,6 +3,8 @@ package main
 import (
 	"errors"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -151,6 +153,10 @@ func TestPostTorrent_Duplicate(t *testing.T) {
 }
 
 func TestPostTorrent_AddsWithSaveDirectory(t *testing.T) {
+	tvRoot := filepath.Join(t.TempDir(), "t", "tv")
+	require.NoError(t, os.MkdirAll(tvRoot, 0o775))
+	saveDir := filepath.Join(tvRoot, "foo", "season1")
+
 	var capturedDir string
 	_, db := newTestItemsHandler(t)
 	h := newHandler(&stubClient{
@@ -161,13 +167,83 @@ func TestPostTorrent_AddsWithSaveDirectory(t *testing.T) {
 		status: func(string) (api.TorrentStatus, error) {
 			return api.TorrentStatus{}, rtorrent.ErrNotFound
 		},
-	}, db, nil, nil)
+	}, db, nil, map[string]string{"tv": tvRoot})
 	req := httptest.NewRequest("POST", "/v1/torrents", strings.NewReader("fake-bytes"))
 	req.Header.Set("Content-Type", "application/x-bittorrent")
 	req.Header.Set("X-Info-Hash", "DEADBEEF"+strings.Repeat("0", 32))
-	req.Header.Set("X-Save-Directory", "/home/seedbox/t/tv/foo/season1")
+	req.Header.Set("X-Save-Directory", saveDir)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	require.Equal(t, 200, w.Code)
-	assert.Equal(t, "/home/seedbox/t/tv/foo/season1", capturedDir)
+	assert.Equal(t, saveDir, capturedDir)
+}
+
+// TestPostTorrent_CreatesMissingSaveDirectory pins the spider-noir regression:
+// rtorrent silently wedges (state=1, is_active=0, no message) when load.raw_start_verbose
+// is called with d.directory.set pointing at a directory whose parent chain does
+// not exist. Even d.close → d.open → d.start cannot unstick the slot once it's
+// wedged — only erase + re-add works. Fix: seedctl mkdir's the save_dir before
+// calling LoadTorrent, so rtorrent never sees a missing path.
+func TestPostTorrent_CreatesMissingSaveDirectory(t *testing.T) {
+	tvRoot := filepath.Join(t.TempDir(), "t", "tv")
+	require.NoError(t, os.MkdirAll(tvRoot, 0o775))
+	// target lives under tvRoot but its parent chain doesn't exist yet —
+	// mimicking the "first torrent under a new show dir" case that wedged
+	// rtorrent for spider-noir.
+	target := filepath.Join(tvRoot, "spider-noir")
+	_, err := os.Stat(target)
+	require.True(t, os.IsNotExist(err), "target must not exist before the request")
+
+	loaded := false
+	_, db := newTestItemsHandler(t)
+	h := newHandler(&stubClient{
+		load: func(_ []byte, _, dir string) (string, error) {
+			// the dir must exist *at the moment LoadTorrent is called*, not after.
+			info, err := os.Stat(dir)
+			require.NoError(t, err, "save dir must exist when LoadTorrent fires")
+			require.True(t, info.IsDir())
+			loaded = true
+			return "DEADBEEF" + strings.Repeat("0", 32), nil
+		},
+		status: func(string) (api.TorrentStatus, error) {
+			return api.TorrentStatus{}, rtorrent.ErrNotFound
+		},
+	}, db, nil, map[string]string{"tv": tvRoot})
+
+	req := httptest.NewRequest("POST", "/v1/torrents", strings.NewReader("fake"))
+	req.Header.Set("X-Info-Hash", "DEADBEEF"+strings.Repeat("0", 32))
+	req.Header.Set("X-Save-Directory", target)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	require.Equal(t, 200, w.Code, "body: %s", w.Body.String())
+	assert.True(t, loaded, "LoadTorrent must still be called")
+	info, statErr := os.Stat(target)
+	require.NoError(t, statErr, "seedctl must have mkdir'd the save_dir")
+	assert.True(t, info.IsDir())
+}
+
+// TestPostTorrent_SaveDirOutsideRoots_Rejects guards the mkdir against
+// arbitrary path creation. The save_dir must resolve under one of the
+// configured roots; anything else returns 400 and LoadTorrent is not called.
+func TestPostTorrent_SaveDirOutsideRoots_Rejects(t *testing.T) {
+	tvRoot := filepath.Join(t.TempDir(), "t", "tv")
+	require.NoError(t, os.MkdirAll(tvRoot, 0o775))
+
+	h := newHandler(&stubClient{
+		load: func([]byte, string, string) (string, error) {
+			t.Fatal("LoadTorrent must not be called for save_dir outside roots")
+			return "", nil
+		},
+		status: func(string) (api.TorrentStatus, error) {
+			return api.TorrentStatus{}, rtorrent.ErrNotFound
+		},
+	}, nil, nil, map[string]string{"tv": tvRoot})
+
+	req := httptest.NewRequest("POST", "/v1/torrents", strings.NewReader("fake"))
+	req.Header.Set("X-Info-Hash", "DEADBEEF"+strings.Repeat("0", 32))
+	req.Header.Set("X-Save-Directory", "/tmp/elsewhere/season1")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	assert.Equal(t, 400, w.Code)
 }

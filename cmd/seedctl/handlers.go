@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -92,6 +93,33 @@ func (h *handler) getTorrent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, st)
 }
 
+// isUnderAnyRoot reports whether saveDir resolves to the same path as one of
+// the configured roots, or to a path nested below it. Both saveDir and each
+// root are cleaned and resolved to absolute form before comparison so that
+// trailing slashes, "." segments, or relative paths don't allow escape.
+func isUnderAnyRoot(saveDir string, roots map[string]string) bool {
+	abs, err := filepath.Abs(saveDir)
+	if err != nil {
+		return false
+	}
+	abs = filepath.Clean(abs)
+	sep := string(os.PathSeparator)
+	for _, root := range roots {
+		if root == "" {
+			continue
+		}
+		rootAbs, err := filepath.Abs(root)
+		if err != nil {
+			continue
+		}
+		rootAbs = filepath.Clean(rootAbs)
+		if abs == rootAbs || strings.HasPrefix(abs, rootAbs+sep) {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *handler) postTorrent(w http.ResponseWriter, r *http.Request) {
 	hash := strings.ToUpper(r.Header.Get("X-Info-Hash"))
 	if hash == "" {
@@ -113,6 +141,23 @@ func (h *handler) postTorrent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	saveDir := r.Header.Get("X-Save-Directory")
+	// rtorrent 0.9.8 silently wedges a torrent (state=1, is_active=0, no
+	// d.message) if load.raw_start_verbose is called with d.directory.set
+	// pointing at a path whose parent chain doesn't exist. Once wedged,
+	// only erase + re-add unsticks it. Mkdir here so rtorrent always sees
+	// the dir on insert. Validate against configured roots first to keep
+	// the mkdir's blast radius bounded.
+	if saveDir != "" && len(h.roots) > 0 {
+		if !isUnderAnyRoot(saveDir, h.roots) {
+			http.Error(w, "save dir outside configured roots", 400)
+			return
+		}
+		if err := os.MkdirAll(saveDir, 0o775); err != nil {
+			slog.Error("mkdir save_dir", "dir", saveDir, "err", err)
+			http.Error(w, "mkdir save_dir failed", 500)
+			return
+		}
+	}
 	gotHash, err := h.c.LoadTorrent(body, hash, saveDir)
 	if err != nil {
 		http.Error(w, "load failed", 422)
