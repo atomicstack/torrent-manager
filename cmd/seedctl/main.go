@@ -3,6 +3,7 @@ package main
 import (
 	"compress/gzip"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -28,7 +30,7 @@ import (
 type config struct {
 	Listen  string `yaml:"listen"`   // e.g. "0.0.0.0:18443"
 	SCGI    string `yaml:"scgi"`     // e.g. "127.0.0.1:5059"
-	ItemsDB string `yaml:"items_db"` // sqlite path; defaults to /home/seedbox/etc/seedctl/items.db
+	ItemsDB string `yaml:"items_db"` // sqlite path; defaults to $HOME/etc/seedctl/items.db
 	// Allowlist accepts CIDRs ("10.0.0.0/24", "2001:db8::/64") or bare IPs
 	// (treated as /32 v4 or /128 v6). Empty/missing list = no filter
 	// (current behaviour). Connections from non-matching peers are dropped
@@ -57,7 +59,12 @@ func main() {
 		os.Exit(1)
 	}
 	if cfg.ItemsDB == "" {
-		cfg.ItemsDB = "/home/seedbox/etc/seedctl/items.db"
+		p, err := defaultItemsDBPath()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "default items_db:", err)
+			os.Exit(1)
+		}
+		cfg.ItemsDB = p
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -127,17 +134,52 @@ func main() {
 	_ = items.Close()
 
 	if shouldRestart {
-		exe, err := os.Executable()
+		exe, err := resolveRestartExe(os.Args, os.Executable)
 		if err != nil {
-			logger.Error("restart_executable", "err", err)
+			logger.Error("resolve_restart_exe", "err", err)
 			os.Exit(1)
 		}
 		logger.Info("restarting_via_exec", "exec", exe, "args", os.Args)
 		if err := syscall.Exec(exe, os.Args, os.Environ()); err != nil {
-			logger.Error("restart_exec", "err", err)
+			logger.Error("restart_exec", "exec", exe, "err", err)
 			os.Exit(1)
 		}
 	}
+}
+
+// resolveRestartExe picks the on-disk path to syscall.Exec for /v1/admin/restart.
+// Operators deploy seedctl by renaming the running binary aside and putting
+// the new one in its place, then triggering restart. os.Executable() reads
+// /proc/self/exe — the running inode's CURRENT path — so after the rename
+// it resolves to the renamed (old) file, and a naive re-exec loads the OLD
+// binary in the same PID. argv[0] still carries the absolute launch path,
+// so we prefer it when present and only fall back to the os.Executable
+// resolver when argv[0] is relative or empty.
+func resolveRestartExe(args []string, fallback func() (string, error)) (string, error) {
+	if len(args) > 0 && filepath.IsAbs(args[0]) {
+		return args[0], nil
+	}
+	if fallback == nil {
+		return "", errors.New("no restart exe candidate: argv[0] not absolute and no fallback resolver")
+	}
+	p, err := fallback()
+	if err != nil {
+		return "", fmt.Errorf("resolve restart exe via fallback: %w", err)
+	}
+	return p, nil
+}
+
+// defaultItemsDBPath returns $HOME/etc/seedctl/items.db. Host-portable so
+// the binary works on both the seedbox and dev laptops without baking in
+// a real install path. (The previous default was a hardcoded scrubbed
+// placeholder that didn't actually exist on the seedbox — startup failed
+// the moment a deploy went out without an explicit items_db config line.)
+func defaultItemsDBPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve $HOME for items_db default: %w", err)
+	}
+	return filepath.Join(home, "etc", "seedctl", "items.db"), nil
 }
 
 func loadConfig(path string) (*config, error) {
