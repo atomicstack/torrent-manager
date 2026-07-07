@@ -269,12 +269,56 @@ ON CONFLICT(feed_name, guid) DO UPDATE SET
 		return err
 	}
 	defer stmt.Close()
+	// hash-merge probe: an item can reach the index via two paths that
+	// disagree on guid — the rss poll uses the feed's <guid> (a url), while
+	// the manual-import flow uses info_hash as the guid. Item identity is
+	// UNIQUE(feed_name, guid), so those two never collide and the same
+	// torrent shows up twice. Before inserting, look for an existing row in
+	// the same feed with the same info_hash under a *different* guid and
+	// update it in place instead — same info_hash means the same torrent.
+	findByHash, err := tx.PrepareContext(ctx,
+		`SELECT guid FROM items WHERE feed_name = ? AND info_hash = ? LIMIT 1`)
+	if err != nil {
+		return err
+	}
+	defer findByHash.Close()
+	mergeByHash, err := tx.PrepareContext(ctx, `
+UPDATE items SET
+  title        = ?,
+  link         = ?,
+  matched_rule = COALESCE(?, matched_rule),
+  last_seen_at = ?
+WHERE feed_name = ? AND guid = ?
+`)
+	if err != nil {
+		return err
+	}
+	defer mergeByHash.Close()
 	for _, it := range items {
 		// reject zero timestamps so an accidentally-uninitialised caller can't
 		// silently park epoch-0 in first_seen_at (which then never recovers,
 		// since the ON CONFLICT path deliberately leaves first_seen_at alone).
 		if it.FirstSeenAt.IsZero() || it.LastSeenAt.IsZero() {
 			return fmt.Errorf("upsert (%s, %s): FirstSeenAt and LastSeenAt are required", it.FeedName, it.GUID)
+		}
+		// When the incoming row carries an info_hash, prefer merging onto an
+		// existing row that already has that hash under a different guid.
+		// Keeps the earlier row's guid + first_seen_at; advances last_seen_at
+		// and fills matched_rule. Skips the insert so no duplicate is created.
+		if it.InfoHash != "" {
+			var existingGUID string
+			switch err := findByHash.QueryRowContext(ctx, it.FeedName, it.InfoHash).Scan(&existingGUID); {
+			case err == nil && existingGUID != it.GUID:
+				if _, err := mergeByHash.ExecContext(ctx,
+					it.Title, it.Link, nullableString(it.MatchedRule),
+					it.LastSeenAt.Unix(), it.FeedName, existingGUID,
+				); err != nil {
+					return fmt.Errorf("upsert merge (%s, %s): %w", it.FeedName, it.InfoHash, err)
+				}
+				continue
+			case err != nil && err != sql.ErrNoRows:
+				return fmt.Errorf("upsert probe (%s, %s): %w", it.FeedName, it.InfoHash, err)
+			}
 		}
 		if _, err := stmt.ExecContext(ctx,
 			it.FeedName, it.GUID, it.Title, it.Link,

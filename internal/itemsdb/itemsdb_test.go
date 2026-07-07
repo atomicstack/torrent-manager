@@ -42,6 +42,43 @@ func TestUpsert_InsertThenUpdate_TouchesLastSeen(t *testing.T) {
 	assert.Equal(t, now2.Unix(), got[0].LastSeenAt.Unix(), "last_seen_at must advance")
 }
 
+// A torrent reaching the index via BOTH paths — manual import (guid =
+// info_hash) and the rss poll (guid = the feed's <guid> url) — must
+// collapse to a single row. Item identity is UNIQUE(feed_name, guid), but
+// the two paths disagree on guid while agreeing on info_hash, so without a
+// hash-level merge the same torrent shows up twice in the ui. Regression
+// for the "duplicate house of the dragon" report.
+func TestUpsert_SameHashDifferentGUID_Dedups(t *testing.T) {
+	db := tmpDB(t)
+	ctx := context.Background()
+	const hash = "E7403CD5F609251A7DEF8F26646F7D6DFEF29CF8"
+
+	// manual import lands first: guid == info_hash.
+	imp := time.Unix(1_783_300_184, 0)
+	require.NoError(t, db.Upsert(ctx, []itemsdb.Item{{
+		FeedName: "HPJ (TV)", GUID: hash,
+		Title:    "House.of.the.Dragon.S03E03.DV.HDR.2160p.WEB.h265-ETHEL.mkv",
+		Link:     "https://fakedoor.store/d.php?r=e7403cd5f609251a7def8f26646f7d6dfef29cf8",
+		InfoHash: hash, FirstSeenAt: imp, LastSeenAt: imp,
+	}}))
+
+	// rss poll discovers the same torrent 29s later with the feed's url guid.
+	rss := imp.Add(29 * time.Second)
+	require.NoError(t, db.Upsert(ctx, []itemsdb.Item{{
+		FeedName: "HPJ (TV)", GUID: "https://fakedoor.store/d.php?r=e7403cd5f609251a7def8f26646f7d6dfef29cf8",
+		Title:    "House.of.the.Dragon.S03E03.DV.HDR.2160p.WEB.h265-ETHEL.mkv",
+		Link:     "https://fakedoor.store/d.php?r=e7403cd5f609251a7def8f26646f7d6dfef29cf8",
+		InfoHash: hash, MatchedRule: "house of the dragon", FirstSeenAt: rss, LastSeenAt: rss,
+	}}))
+
+	got, _, err := db.List(ctx, itemsdb.ListQuery{EnqueuedFilter: itemsdb.FilterAll, Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, got, 1, "same (feed, info_hash) via two guids must be one row")
+	assert.Equal(t, imp.Unix(), got[0].FirstSeenAt.Unix(), "first_seen_at kept from the earlier (manual-import) row")
+	assert.Equal(t, rss.Unix(), got[0].LastSeenAt.Unix(), "last_seen_at advances to the rss sighting")
+	assert.Equal(t, "house of the dragon", got[0].MatchedRule, "matched_rule from the rss row is merged in")
+}
+
 func TestList_FTS5SearchByPrefix(t *testing.T) {
 	db := tmpDB(t)
 	ctx := context.Background()
