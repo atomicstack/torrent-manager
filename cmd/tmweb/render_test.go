@@ -99,6 +99,55 @@ func TestRenderRows_EnqueuedItemHasBadge(t *testing.T) {
 	assert.Contains(t, body, `enqueued`)
 }
 
+// TestRenderRows_SourceBadge ensures an enqueued item carries a second badge
+// naming how it got there, alongside the "enqueued" badge.
+func TestRenderRows_SourceBadge(t *testing.T) {
+	now := time.Now().Unix()
+	for _, tc := range []struct {
+		name       string
+		source     string
+		wantText   string
+		wantClass  string
+		otherClass string
+	}{
+		{"auto", "auto", ">auto<", "badge-auto", "badge-manual"},
+		{"manual", "manual", ">manual<", "badge-manual", "badge-auto"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := newRenderer()
+			require.NoError(t, err)
+			var buf bytes.Buffer
+			require.NoError(t, r.rows.Execute(&buf, rowsTemplateData{Items: []api.ItemRecord{
+				{FeedName: "TrackerA (TV)", Title: "Foo S01E01", InfoHash: "DEADBEEF",
+					Enqueued: true, EnqueueSource: tc.source, FirstSeenAt: now, LastSeenAt: now},
+			}}))
+			body := buf.String()
+			assert.Contains(t, body, "badge-enqueued")
+			assert.Contains(t, body, tc.wantClass)
+			assert.Contains(t, body, tc.wantText)
+			assert.NotContains(t, body, tc.otherClass)
+		})
+	}
+}
+
+// TestRenderRows_EnqueuedWithUnknownSourceHasNoSourceBadge: rows enqueued
+// before source tracking existed have an empty source — render the enqueued
+// badge alone rather than an empty or mislabelled one.
+func TestRenderRows_EnqueuedWithUnknownSourceHasNoSourceBadge(t *testing.T) {
+	r, err := newRenderer()
+	require.NoError(t, err)
+	var buf bytes.Buffer
+	now := time.Now().Unix()
+	require.NoError(t, r.rows.Execute(&buf, rowsTemplateData{Items: []api.ItemRecord{
+		{FeedName: "TrackerA (TV)", Title: "Foo S01E01", InfoHash: "DEADBEEF",
+			Enqueued: true, EnqueueSource: "", FirstSeenAt: now, LastSeenAt: now},
+	}}))
+	body := buf.String()
+	assert.Contains(t, body, "badge-enqueued")
+	assert.NotContains(t, body, "badge-auto")
+	assert.NotContains(t, body, "badge-manual")
+}
+
 // TestRenderRows_NotEnqueuedHasNoBadge ensures we don't accidentally render
 // a stray badge for items that haven't been enqueued.
 func TestRenderRows_NotEnqueuedHasNoBadge(t *testing.T) {

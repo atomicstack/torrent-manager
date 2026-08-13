@@ -250,6 +250,10 @@ func (s *Seedctl) PostTorrent(ctx context.Context, hash string, body []byte, sav
 	}
 	req.Header.Set("Content-Type", "application/x-bittorrent")
 	req.Header.Set("X-Info-Hash", strings.ToUpper(hash))
+	// every enqueue leaving tmweb is user-driven — a manual pick, the ✨
+	// classify flow, or an import — so it's always tagged manual. tmgr is
+	// the only producer of auto enqueues.
+	req.Header.Set(api.HeaderEnqueueSource, api.EnqueueSourceManual)
 	req.ContentLength = int64(len(body))
 	if saveDir != "" {
 		req.Header.Set("X-Save-Directory", saveDir)

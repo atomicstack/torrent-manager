@@ -3,6 +3,16 @@
 // import it without dragging in transitive deps.
 package api
 
+// Headers and values for POST /v1/torrents. HeaderEnqueueSource tells seedctl
+// which code path drove the enqueue so the ui can distinguish tmgr's rule
+// matches from tmweb's user-driven picks. An absent or unrecognised value is
+// recorded as auto, keeping older clients working.
+const (
+	HeaderEnqueueSource = "X-Enqueue-Source"
+	EnqueueSourceAuto   = "auto"
+	EnqueueSourceManual = "manual"
+)
+
 // AddTorrentResponse is returned by POST /v1/torrents.
 type AddTorrentResponse struct {
 	InfoHash string `json:"info_hash"`

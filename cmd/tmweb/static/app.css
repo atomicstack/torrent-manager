@@ -4,6 +4,7 @@
   --muted: #777;
   --accent: #0a58ca;
   --border: #ddd;
+  --manual: #a15c07;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -12,6 +13,7 @@
     --muted: #999;
     --accent: #6ea8fe;
     --border: #333;
+    --manual: #e0a458;
   }
 }
 
@@ -237,6 +239,19 @@ th.sortable .sort-arrow {
   color: var(--accent);
 }
 
+/* how the item got enqueued. auto is the common case, so it stays quiet;
+   manual is tinted to make deliberate picks scannable in a long list. */
+.badge-auto {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.badge-manual {
+  background: #a15c0722;
+  color: var(--manual);
+}
+
 .btn-enqueue {
   padding: 0.3rem 0.6rem;
   border: 1px solid var(--border);
@@ -391,7 +406,8 @@ th.sortable .sort-arrow {
   font-size: 0.85rem;
   color: var(--muted);
 }
-.form-row input[type=text] {
+.form-row input[type=text],
+.form-row input[type=url] {
   font-family: ui-monospace, monospace;
   font-size: 0.85rem;
   padding: 0.4rem;

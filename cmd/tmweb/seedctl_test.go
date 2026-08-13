@@ -151,6 +151,22 @@ func TestSeedctl_PostTorrent_SendsHeadersAndBody(t *testing.T) {
 	assert.Equal(t, hash, out.InfoHash)
 }
 
+// TestSeedctl_PostTorrent_MarksSourceManual: every enqueue that leaves tmweb is
+// user-driven (manual pick, ✨ classify, or import), so it must be tagged
+// manual to distinguish it from tmgr's automatic rule matches.
+func TestSeedctl_PostTorrent_MarksSourceManual(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "manual", r.Header.Get("X-Enqueue-Source"))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(api.AddTorrentResponse{InfoHash: "X", Added: true})
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewSeedctl(srv.URL, srv.Client())
+	_, err := c.PostTorrent(context.Background(), "X", []byte("body"), "/tv/show/season1")
+	require.NoError(t, err)
+}
+
 func TestSeedctl_PostTorrent_OmitsSaveDirWhenEmpty(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Empty(t, r.Header.Get("X-Save-Directory"))

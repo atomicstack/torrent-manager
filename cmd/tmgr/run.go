@@ -580,6 +580,9 @@ func seedctlAdd(ctx context.Context, hc *http.Client, base, hash string, body []
 	req, _ := http.NewRequestWithContext(ctx, "POST", base+"/v1/torrents", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/x-bittorrent")
 	req.Header.Set("X-Info-Hash", hash)
+	// tmgr only ever enqueues off a rule match or the classifier fallback —
+	// both automatic. tmweb is the sole source of manual enqueues.
+	req.Header.Set(api.HeaderEnqueueSource, api.EnqueueSourceAuto)
 	if saveDir != "" {
 		req.Header.Set("X-Save-Directory", saveDir)
 	}

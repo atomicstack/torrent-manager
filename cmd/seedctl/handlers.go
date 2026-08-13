@@ -163,12 +163,15 @@ func (h *handler) postTorrent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "load failed", 422)
 		return
 	}
-	// best-effort: record auto-enqueue history. a write failure here must not
+	// best-effort: record enqueue history. a write failure here must not
 	// fail the request — the torrent is already loaded into rtorrent.
+	// X-Enqueue-Source distinguishes tmgr's rule matches ("auto") from
+	// tmweb's user-driven picks ("manual"); absent or unrecognised values
+	// fall back to auto (see itemsdb.ParseSource).
 	if err := h.items.RecordEnqueue(r.Context(), itemsdb.Enqueue{
 		InfoHash:   gotHash,
 		SaveDir:    saveDir,
-		Source:     itemsdb.SourceAuto,
+		Source:     itemsdb.ParseSource(r.Header.Get(api.HeaderEnqueueSource)),
 		EnqueuedAt: time.Now(),
 	}); err != nil {
 		slog.Warn("record enqueue", "hash", gotHash, "err", err)

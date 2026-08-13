@@ -54,6 +54,19 @@ const (
 	SourceManual Source = "manual"
 )
 
+// ParseSource maps a wire value (the X-Enqueue-Source header) to a Source.
+// Anything unrecognised — including the empty string sent by a tmgr built
+// before the header existed — falls back to SourceAuto, so the column never
+// holds a value outside the known set.
+func ParseSource(s string) Source {
+	switch Source(strings.ToLower(strings.TrimSpace(s))) {
+	case SourceManual:
+		return SourceManual
+	default:
+		return SourceAuto
+	}
+}
+
 // Enqueue is one row of the enqueues history table.
 type Enqueue struct {
 	InfoHash   string

@@ -14,8 +14,13 @@ three binaries cooperate over mtls.
 ## components
 
 - **cmd/tmgr** — k3s daemonset. polls feeds, indexes items via seedctl,
-  evaluates rules, enqueues matches. claude classifier fallback for items
-  that don't match any rule.
+  evaluates rules, enqueues matches. items matching **no** rule are logged
+  at debug and skipped entirely (`run.go`, `item_no_match`) — tmgr never
+  enqueues them. the claude classifier is *not* a no-rule fallback: it only
+  runs for items that **already matched** a rule whose season couldn't be
+  regex-extracted, purely to resolve show/season for the save_dir
+  (`resolveShowSeasonAI`). so every enqueue with an empty `matched_rule`
+  came from tmweb by hand, never from tmgr.
 - **cmd/seedctl** — runs natively on the seedbox (seedbox.example.com). https
   on :18443. wraps rtorrent (scgi). owns the sqlite items index.
 - **cmd/tmweb** — k3s web ui (port :8080, lan-only). htmx + sse. serves
@@ -72,6 +77,64 @@ leaf packages under `internal/` follow standard go layout. quick reference:
 - **seedctl**: `make deploy-seedhost` — scp+ssh, builds the binary on the
   seedbox via go (avoids cgo cross-compile issues), drops it at
   `/home/seedbox/bin/seedctl` along with the certs.
+- **watchlist**: the real watchlist lives in `private/watchlist.yaml` (the
+  tracked `deploy/k8s/configmap.yaml` is a scrubbed placeholder). it reaches
+  the cluster as the `tmgr-watchlist` configmap, mounted at
+  `/etc/tmgr/watchlist.yaml`. the tmgr CronJob is `*/5 * * * *` and each run
+  spawns a fresh pod that mounts the current configmap — so updating the
+  configmap is the whole deploy; the new rules take effect on the next tick,
+  no rollout needed. apply with:
+  ```
+  kubectl --kubeconfig=$HOME/.kube/rpi-sandbox.yaml create configmap tmgr-watchlist \
+    --from-file=watchlist.yaml=private/watchlist.yaml \
+    --dry-run=client -o yaml -n torrent-manager | \
+  kubectl --kubeconfig=$HOME/.kube/rpi-sandbox.yaml apply -f -
+  ```
+  **ALWAYS deploy immediately after editing the watchlist** — an edit that
+  isn't pushed to the cluster is useless; tmgr only ever reads the configmap.
+
+### deploying when kubectl can't reach the cluster (this workstation)
+
+on this mac, macOS sequoia's Local Network privacy (a TCC permission, NOT the
+application firewall — that's off) blocks **third-party / non-apple binaries**
+from reaching the local network. it hits any homebrew binary — `kubectl`,
+`python3`, etc. — which all die with `connect: no route to host` (EHOSTUNREACH)
+on BOTH the v4 LAN subnet and the on-link v6 `/64`, while apple-signed binaries
+(`/usr/bin/curl`, `ping`, `ping6`) are exempt and reach the same
+`https://<node-ip>:6443` fine. ipv6 itself is healthy — ping6 + curl reach the
+pis over v6; the "no route to host" is a synthesized denial, not a routing
+fault. **the fix that actually worked (2026-06-15): restart the tmux server**
+— no settings change, no permission granted. the long-lived tmux server (old,
+low pid) was holding a stale "denied" local-network state for its whole
+lifetime, and every binary it spawned inherited it; a fresh tmux server
+cleared it and kubectl/python3 reached the LAN again. (exact mechanism —
+cached TCC decision vs other per-process state — not confirmed; the
+empirical, repeatable fix is the restart.) if a restart isn't enough, the
+curl workaround below doesn't need kubectl networking at all: kubectl
+sub-commands that are purely local still work (`config view --raw`,
+`create ... --dry-run=client`), so generate artifacts locally and ship them
+with curl + the client certs pulled out of the kubeconfig:
+```
+KC=$HOME/.kube/rpi-sandbox.yaml; TMP=$(mktemp -d)
+kubectl --kubeconfig=$KC config view --raw -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 -d > $TMP/ca.crt
+kubectl --kubeconfig=$KC config view --raw -o jsonpath='{.users[0].user.client-certificate-data}'   | base64 -d > $TMP/client.crt
+kubectl --kubeconfig=$KC config view --raw -o jsonpath='{.users[0].user.client-key-data}'           | base64 -d > $TMP/client.key
+kubectl create configmap tmgr-watchlist --from-file=watchlist.yaml=private/watchlist.yaml \
+  --dry-run=client -o json -n torrent-manager > $TMP/cm.json
+# server-side apply (json is valid yaml for apply-patch); node ipv4, not the .local name
+curl -sS --cacert $TMP/ca.crt --cert $TMP/client.crt --key $TMP/client.key -X PATCH \
+  -H "Content-Type: application/apply-patch+yaml" \
+  "https://10.0.0.189:6443/api/v1/namespaces/torrent-manager/configmaps/tmgr-watchlist?fieldManager=deploy&force=true" \
+  --data-binary @$TMP/cm.json
+```
+first thing to try (so plain kubectl works again): **restart the tmux server**
+(`tmux kill-server`, or detach and start a fresh one) and re-run kubectl. that
+alone fixed it on 2026-06-15 with no settings change. if it persists, then look
+at system settings → privacy & security → local network for the terminal/tmux,
+or run kubectl outside tmux. confirm the symptom any time with a one-liner:
+a homebrew binary (`python3 -c "import socket; socket.create_connection(('10.0.0.189',6443),5)"`)
+fails with EHOSTUNREACH while `/usr/bin/curl https://10.0.0.189:6443/healthz -k`
+succeeds.
 
 ## conventions
 
@@ -183,6 +246,26 @@ i.id ASC` (bm25 first, then date as a tiebreaker).
 - when adding a tmweb test that needs a real `.torrent` payload, build it
   with `anacrolix/torrent/bencode` + `metainfo.Info` + `metainfo.MetaInfo`
   (existing tests in `cmd/tmweb/main_test.go` show the pattern).
+- ad-hoc scripts that import `internal/...` (e.g. to load + compile
+  `private/watchlist.yaml` end-to-end) MUST live inside the module tree.
+  `go run /tmp/foo.go` importing `internal/watchlist` fails with "use of
+  internal package not allowed". drop a throwaway `cmd/_check/main.go`,
+  run `go run ./cmd/_check/`, then `rm -rf cmd/_check`. `go run -` with a
+  heredoc also doesn't work — `go run` needs a file path or a package, not
+  stdin.
+- ssh-wrapped sqlite queries against the seedbox need inverted quote
+  nesting: outer `ssh host "..."`, inner sqlite literals in single quotes.
+  `sqlite3 db "SELECT ... WHERE t LIKE '%foo%'"`. double-quoted string
+  literals inside the sql get parsed as column names ("no such column: %foo%").
+  see also `~/.claude/.../memory/feedback_sqlite_path_on_tiny.md` for the
+  binary path (`~/bin/sqlite3 ~/etc/seedctl/items.db`).
+- **`items` table columns** (so you don't guess and hit "no such column"):
+  `id, feed_name, guid, title, link, info_hash, matched_rule,
+  first_seen_at, last_seen_at, total_bytes, file_count, dir_count`. note
+  it's `feed_name`, NOT `feed`. the `first_seen_at`/`last_seen_at` are unix
+  epoch ints. FTS mirror is `items_fts(title)`. canonical schema +
+  indexes live in `internal/itemsdb/itemsdb.go` — check there or run
+  `.schema items` before writing a query.
 
 ## layout
 

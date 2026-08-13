@@ -8,6 +8,11 @@
   <td class="cell-status">
     {{if .Enqueued}}
       <span class="badge badge-enqueued">enqueued</span>
+      {{- if eq .EnqueueSource "auto"}}
+      <span class="badge badge-auto" title="enqueued by tmgr from a watchlist rule">auto</span>
+      {{- else if eq .EnqueueSource "manual"}}
+      <span class="badge badge-manual" title="enqueued by hand from the web ui">manual</span>
+      {{- end}}
     {{end}}
   </td>
   <td class="cell-title">
