@@ -96,7 +96,7 @@ func TestClient_LoadTorrent_WithSaveDir(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF", hash)
 	require.Len(t, f.requests, 1)
-	assert.Contains(t, string(f.requests[0]), "d.directory.set=/home/seedbox/t/tv/severance/season2")
+	assert.Contains(t, string(f.requests[0]), "d.directory.set=&#34;/home/seedbox/t/tv/severance/season2&#34;")
 }
 
 func TestClient_GetStatus_NotFound(t *testing.T) {
@@ -123,4 +123,41 @@ func TestClient_GetStatus_Found(t *testing.T) {
 	require.Len(t, f.requests, 2)
 	assert.Contains(t, string(f.requests[0]), "d.name")
 	assert.Contains(t, string(f.requests[1]), "d.complete")
+}
+
+// Regression: rtorrent parses each trailing command string of
+// load.raw_start_verbose with its own command parser (rpc::parse_command),
+// which ends an *unquoted* argument at the first space. A save dir like
+// ".../Guy Mont Spelling Bee/season3" therefore left "Mont Spelling
+// Bee/season3" as trailing junk and rtorrent threw "Junk at end of input.",
+// aborting the whole post-load command chain: d.directory was never applied
+// (so the torrent downloaded into rtorrent's default dir) and the rc's
+// addtime hook never ran (so ruTorrent showed a blank "added" column).
+// Verified against rtorrent 0.9.8: unquoted throws, quoted parses.
+func TestClient_LoadTorrent_SaveDirWithSpacesIsQuoted(t *testing.T) {
+	loadOK := []byte("Content-Type: text/xml\r\n\r\n<methodResponse><params><param><value><i4>0</i4></value></param></params></methodResponse>")
+	f := newFakeRTorrent(t, loadOK)
+
+	c := NewClient(f.addr())
+	_, err := c.LoadTorrent([]byte("b"), "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "/home6/atmc/t/tv/Guy Mont Spelling Bee/season3")
+	require.NoError(t, err)
+	require.Len(t, f.requests, 1)
+	// &#34; is xml.EscapeText's rendering of the double quote that wraps the arg.
+	assert.Contains(t, string(f.requests[0]),
+		"d.directory.set=&#34;/home6/atmc/t/tv/Guy Mont Spelling Bee/season3&#34;")
+}
+
+func TestQuoteCommandArg(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		{"plain", "/t/tv/hard.quiz/season1", `"/t/tv/hard.quiz/season1"`},
+		{"spaces", "/t/tv/Guy Mont Spelling Bee/season3", `"/t/tv/Guy Mont Spelling Bee/season3"`},
+		{"comma", "/t/tv/foo, bar/season1", `"/t/tv/foo, bar/season1"`},
+		{"apostrophe", "/t/tv/Guy Montgomery's Bee/s3", `"/t/tv/Guy Montgomery's Bee/s3"`},
+		{"double quote", `/t/tv/say "hi"/s1`, `"/t/tv/say \"hi\"/s1"`},
+		{"backslash", `/t/tv/back\slash/s1`, `"/t/tv/back\\slash/s1"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, quoteCommandArg(tc.in))
+		})
+	}
 }

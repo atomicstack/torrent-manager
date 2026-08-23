@@ -77,7 +77,7 @@ type TorrentMetadata struct {
 // view (main).
 func (c *Client) ListTorrents() ([]TorrentMetadata, error) {
 	rows, err := c.callStringMatrix("d.multicall2",
-		xmlString(""),    // arg 1: target rtorrent (empty = current)
+		xmlString(""),     // arg 1: target rtorrent (empty = current)
 		xmlString("main"), // arg 2: view to enumerate
 		xmlString("d.hash="),
 		xmlString("d.name="),
@@ -116,7 +116,7 @@ func (c *Client) Ping() (string, error) {
 func (c *Client) LoadTorrent(data []byte, knownHash, saveDir string) (string, error) {
 	args := []xmlValue{xmlString(""), xmlBase64(data)}
 	if saveDir != "" {
-		args = append(args, xmlString("d.directory.set="+saveDir))
+		args = append(args, xmlString("d.directory.set="+quoteCommandArg(saveDir)))
 	}
 	_, err := c.call("load.raw_start_verbose", args...)
 	if err != nil {
@@ -148,4 +148,29 @@ func (c *Client) GetStatus(hash string) (api.TorrentStatus, error) {
 		Name:     name,
 		Complete: complete == "1",
 	}, nil
+}
+
+// quoteCommandArg wraps s in double quotes for rtorrent's command parser.
+// The trailing strings handed to load.raw_start_verbose are not opaque values:
+// rtorrent parses each one with rpc::parse_command, which ends an unquoted
+// argument at the first space. An unquoted save dir containing a space (e.g.
+// ".../Guy Mont Spelling Bee/season3") therefore left the remainder as trailing
+// junk and rtorrent threw "Junk at end of input.", which aborts the entire
+// post-load command chain — d.directory never applied, so the torrent landed in
+// rtorrent's default download dir, and the rc's addtime hook never ran.
+// Quoting is always safe, so it is applied unconditionally rather than only
+// when a space is present. Inside a quoted string the parser honours backslash
+// escapes, so escaping \ and " is sufficient.
+func quoteCommandArg(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 2)
+	b.WriteByte('"')
+	for i := 0; i < len(s); i++ {
+		if s[i] == '"' || s[i] == '\\' {
+			b.WriteByte('\\')
+		}
+		b.WriteByte(s[i])
+	}
+	b.WriteByte('"')
+	return b.String()
 }
