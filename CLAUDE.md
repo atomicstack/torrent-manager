@@ -205,6 +205,30 @@ materialise a template into a string for embedding in `data:`. client
 side: `startClassify` in `cmd/tmweb/templates/layout.html` (single
 in-flight EventSource per page, state-class toggling on `.step` items).
 
+### rtorrent command strings are parsed, not passed
+
+the trailing strings handed to `load.raw_start_verbose` are **rtorrent
+commands**, parsed by `rpc::parse_command` — not opaque values. an unquoted
+argument ends at the **first space**, so a save_dir with a space in it left
+trailing text and rtorrent threw `Junk at end of input.`. that throw aborts
+the entire post-load command chain, which looks like three unrelated bugs:
+
+- `d.directory` never applied → torrent downloads into
+  `directory.default.set` (`~/downloads`) instead of the derived season dir
+- rutorrent shows `command on torrent creation failed: junk at end of input.`
+- rutorrent's `added` column is blank (the addtime custom field never lands)
+
+`internal/rtorrent.quoteCommandArg` wraps the value in double quotes and
+escapes `\` and `"` (the parser honours backslash escapes inside a quoted
+string). **any new command string that interpolates variable data must go
+through it.** two watchlist rules have spaces in `directory:`
+(`Guy Mont Spelling Bee`, `Taskmaster (NZ)`), so this is live, not theoretical.
+
+**fingerprint for triage**: `roots:` uses the `/home6/atmc/t/...` form, so a
+`d.directory` reading `/home6/atmc/downloads/...` was set by hand or by
+rutorrent, *not* by seedctl — useful for telling a failed enqueue that
+someone later cleaned up from one that worked.
+
 ### torrent cache
 
 `cmd/tmweb/torrentcache.go` — in-memory ttl cache bridging the classify
