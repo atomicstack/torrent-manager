@@ -581,4 +581,30 @@ form.htmx-request .step-list .step-3.step::before {
   .cell-title  { flex: 1 0 100%; }
   /* loading… / no-matches placeholders should fill the row. */
   .empty       { flex: 1 0 100%; text-align: center; }
+
+  /* the header row would otherwise vanish with the table chrome, taking
+     the only sort control with it. restyle it as a strip of tappable sort
+     chips above the cards; the th click handlers + arrows work unchanged. */
+  thead { display: block; }
+  thead tr {
+    align-items: center;
+    gap: 0.4rem;
+    margin-bottom: 0.75rem;
+    padding: 0;
+    border: none;
+  }
+  thead tr::before {
+    content: "sort:";
+    color: var(--muted);
+  }
+  th.sortable {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.75rem;
+    padding: 0 0.8rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-weight: normal;
+  }
+  th.sortable.sorted { border-color: var(--accent); }
 }
