@@ -1037,31 +1037,39 @@ func (h *handler) enqueueDo(w http.ResponseWriter, req *http.Request) {
 	}, page, perPage)
 }
 
-// lookupItem fetches an item by (feed, guid) by listing the feed with
-// FilterAll and scanning. Not efficient but adequate at the expected
-// ≤200 items/feed; phase 3 could add a dedicated /v1/items/by-id
-// endpoint to seedctl if this becomes a hot path.
-//
-// TODO(phase3): add seedctl GET /v1/items/by-id?feed=&guid= to avoid the
-// full-feed scan.
+// lookupItem fetches one item by (feed, guid). seedctl filters on the
+// indexed (feed_name, guid) pair, so the lookup is exact at any feed size.
+// The guid is re-checked client-side as a guard against a seedctl too old
+// to know the guid param (it would hand back an unfiltered page instead).
 func (h *handler) lookupItem(ctx context.Context, feed, guid string) (api.ItemRecord, error) {
 	if feed == "" || guid == "" {
 		return api.ItemRecord{}, fmt.Errorf("missing feed or guid")
 	}
-	resp, err := h.seedctl.ListItems(ctx, ItemsQuery{
-		Feed:           feed,
-		EnqueuedFilter: itemsdb.FilterAll,
-		Limit:          1000,
-	})
+	return h.findItem(ctx, ItemsQuery{Feed: feed, GUID: guid},
+		func(it api.ItemRecord) bool { return it.GUID == guid })
+}
+
+// lookupItemByHash fetches the item in feed carrying infoHash, whatever
+// its guid. Used after an import upsert, which seedctl may have merged
+// into a pre-existing rss row that keeps its own guid.
+func (h *handler) lookupItemByHash(ctx context.Context, feed, infoHash string) (api.ItemRecord, error) {
+	return h.findItem(ctx, ItemsQuery{Feed: feed, InfoHash: infoHash},
+		func(it api.ItemRecord) bool { return it.InfoHash == infoHash })
+}
+
+func (h *handler) findItem(ctx context.Context, q ItemsQuery, match func(api.ItemRecord) bool) (api.ItemRecord, error) {
+	q.EnqueuedFilter = itemsdb.FilterAll
+	q.Limit = 1
+	resp, err := h.seedctl.ListItems(ctx, q)
 	if err != nil {
 		return api.ItemRecord{}, err
 	}
 	for _, it := range resp.Items {
-		if it.GUID == guid {
+		if match(it) {
 			return it, nil
 		}
 	}
-	return api.ItemRecord{}, fmt.Errorf("item not found: feed=%q guid=%q", feed, guid)
+	return api.ItemRecord{}, fmt.Errorf("item not found: feed=%q guid=%q info_hash=%q", q.Feed, q.GUID, q.InfoHash)
 }
 
 // findRule returns the compiled ShowRule with the given name, or nil if

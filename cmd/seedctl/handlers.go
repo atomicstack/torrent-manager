@@ -229,6 +229,8 @@ func (h *handler) listItems(w http.ResponseWriter, r *http.Request) {
 	rows, total, err := h.items.List(r.Context(), itemsdb.ListQuery{
 		Q:              q.Get("q"),
 		Feed:           q.Get("feed"),
+		GUID:           q.Get("guid"),
+		InfoHash:       q.Get("info_hash"),
 		EnqueuedFilter: parseEnqueuedFilter(q.Get("enqueued_filter")),
 		SortField:      itemsdb.SortField(q.Get("sort_field")),
 		SortDir:        itemsdb.SortDir(q.Get("sort_dir")),

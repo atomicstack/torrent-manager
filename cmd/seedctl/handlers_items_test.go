@@ -142,3 +142,26 @@ func TestExportItems_ReturnsAll(t *testing.T) {
 	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
 	assert.Len(t, resp.Items, 1)
 }
+
+// guid= and info_hash= narrow /v1/items to an exact row, so tmweb can look
+// up any item without paging the whole feed.
+func TestListItems_GUIDAndInfoHashParams(t *testing.T) {
+	h, db := newTestItemsHandler(t)
+	now := time.Now()
+	require.NoError(t, db.Upsert(context.Background(), []itemsdb.Item{
+		{FeedName: "f", GUID: "g1", Title: "One", InfoHash: "AAAA", FirstSeenAt: now, LastSeenAt: now},
+		{FeedName: "f", GUID: "g2", Title: "Two", InfoHash: "BBBB", FirstSeenAt: now, LastSeenAt: now},
+	}))
+	for _, tc := range []struct{ query, want string }{
+		{"guid=g1", "One"},
+		{"info_hash=BBBB", "Two"},
+	} {
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, httptest.NewRequest("GET", "/v1/items?feed=f&enqueued_filter=all&"+tc.query, nil))
+		require.Equal(t, http.StatusOK, rr.Code)
+		var resp api.ItemsListResponse
+		require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+		require.Len(t, resp.Items, 1, tc.query)
+		assert.Equal(t, tc.want, resp.Items[0].Title, tc.query)
+	}
+}

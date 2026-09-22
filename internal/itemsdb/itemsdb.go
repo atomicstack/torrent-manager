@@ -125,6 +125,8 @@ const (
 type ListQuery struct {
 	Q              string // fts5 query string; empty = list by recency
 	Feed           string // exact feed_name match; empty = all feeds
+	GUID           string // exact guid match; empty = any. indexed via UNIQUE(feed_name, guid)
+	InfoHash       string // exact info_hash match; empty = any. indexed via items_hash
 	EnqueuedFilter EnqueuedFilter
 	SortField      SortField
 	SortDir        SortDir
@@ -369,6 +371,14 @@ func (d *DB) List(ctx context.Context, q ListQuery) ([]Item, int, error) {
 	if q.Feed != "" {
 		where = append(where, "i.feed_name = ?")
 		args = append(args, q.Feed)
+	}
+	if q.GUID != "" {
+		where = append(where, "i.guid = ?")
+		args = append(args, q.GUID)
+	}
+	if q.InfoHash != "" {
+		where = append(where, "i.info_hash = ?")
+		args = append(args, q.InfoHash)
 	}
 	switch q.EnqueuedFilter {
 	case FilterUnenqueued:

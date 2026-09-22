@@ -42,6 +42,8 @@ func NewSeedctl(base string, hc *http.Client) *Seedctl {
 type ItemsQuery struct {
 	Q              string
 	Feed           string
+	GUID           string
+	InfoHash       string
 	EnqueuedFilter itemsdb.EnqueuedFilter
 	SortField      itemsdb.SortField
 	SortDir        itemsdb.SortDir
@@ -82,6 +84,12 @@ func (s *Seedctl) ListItems(ctx context.Context, q ItemsQuery) (api.ItemsListRes
 	}
 	if q.Feed != "" {
 		values.Set("feed", q.Feed)
+	}
+	if q.GUID != "" {
+		values.Set("guid", q.GUID)
+	}
+	if q.InfoHash != "" {
+		values.Set("info_hash", q.InfoHash)
 	}
 	if q.EnqueuedFilter != "" {
 		values.Set("enqueued_filter", string(q.EnqueuedFilter))

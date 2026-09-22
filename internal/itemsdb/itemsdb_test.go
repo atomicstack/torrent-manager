@@ -3,6 +3,7 @@ package itemsdb_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -390,4 +391,46 @@ func TestList_OrderMirrorsRSSFeed(t *testing.T) {
 	// Expected: D (only-in-tick-2, newest first_seen_at), then A B C ordered
 	// by their insertion ids (matching rss xml order from tick 1).
 	assert.Equal(t, []string{"D", "A", "B", "C"}, titles)
+}
+
+// Exact (feed, guid) and (feed, info_hash) lookups must find a row no matter
+// how deep it sits in the feed's recency order. tmweb used to scan only the
+// newest 1000 rows of a feed, so enqueueing an older item failed with
+// "item not found".
+func TestList_GUIDAndInfoHashFilters_FindOldRows(t *testing.T) {
+	db := tmpDB(t)
+	ctx := context.Background()
+	base := time.Unix(1_700_000_000, 0)
+	var batch []itemsdb.Item
+	for i := range 1500 {
+		ts := base.Add(time.Duration(i) * time.Minute)
+		batch = append(batch, itemsdb.Item{
+			FeedName: "HPJ (TV)", GUID: fmt.Sprintf("https://tracker.test/d.php?r=%040d", i),
+			Title: fmt.Sprintf("Show S01E%04d", i), InfoHash: fmt.Sprintf("%040d", i),
+			FirstSeenAt: ts, LastSeenAt: ts,
+		})
+	}
+	require.NoError(t, db.Upsert(ctx, batch))
+
+	oldest := batch[0]
+	got, total, err := db.List(ctx, itemsdb.ListQuery{
+		Feed: "HPJ (TV)", GUID: oldest.GUID, EnqueuedFilter: itemsdb.FilterAll, Limit: 1,
+	})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, 1, total)
+	assert.Equal(t, oldest.Title, got[0].Title)
+
+	got, _, err = db.List(ctx, itemsdb.ListQuery{
+		Feed: "HPJ (TV)", InfoHash: oldest.InfoHash, EnqueuedFilter: itemsdb.FilterAll, Limit: 1,
+	})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, oldest.GUID, got[0].GUID)
+
+	got, _, err = db.List(ctx, itemsdb.ListQuery{
+		Feed: "HPJ (TV)", GUID: "nope", EnqueuedFilter: itemsdb.FilterAll, Limit: 1,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, got)
 }

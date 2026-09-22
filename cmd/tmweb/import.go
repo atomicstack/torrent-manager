@@ -130,24 +130,35 @@ func (h *handler) fetchAndIndex(ctx context.Context, feedName, rawURL string) (a
 	if err := h.seedctl.UpsertItems(ctx, []api.ItemRecord{it}); err != nil {
 		return api.ItemRecord{}, fmt.Errorf("index: %w", err)
 	}
+	// seedctl merges an upsert into any existing row in the same feed with
+	// the same info_hash (e.g. rss already indexed this torrent), and that
+	// row keeps its own guid. read the stored row back so every follow-up
+	// request — meta, cache key, the modal's enqueue POST — uses the guid
+	// that actually exists. also picks up enqueued state + saved meta.
+	stored, err := h.lookupItemByHash(ctx, feedName, hash)
+	if err != nil {
+		return api.ItemRecord{}, fmt.Errorf("index: read back: %w", err)
+	}
+	it = stored
+	it.TotalBytes, it.FileCount, it.DirCount = meta.TotalBytes, meta.FileCount, meta.DirCount()
 	// best-effort: the meta columns aren't part of the upsert payload yet,
 	// so set them via /v1/items/meta. failure here doesn't block the
 	// import — the modal still works, just without inline size + counts
 	// until the user opens it (which would also populate meta).
 	if err := h.seedctl.SetItemMeta(ctx, api.ItemMetaRequest{
 		FeedName:   feedName,
-		GUID:       hash,
+		GUID:       it.GUID,
 		InfoHash:   hash,
 		TotalBytes: meta.TotalBytes,
 		FileCount:  meta.FileCount,
 		DirCount:   meta.DirCount(),
 	}); err != nil {
-		slog.Warn("import_set_meta_failed", "feed", feedName, "guid", hash, "err", err)
+		slog.Warn("import_set_meta_failed", "feed", feedName, "guid", it.GUID, "err", err)
 	}
 
 	// prime the cache so the follow-up confirm-modal → enqueue POST
 	// reuses these bytes instead of hitting the tracker again.
-	h.torrents.Put(feedName, hash, &cachedTorrent{
+	h.torrents.Put(feedName, it.GUID, &cachedTorrent{
 		Bytes:    body,
 		Meta:     meta,
 		InfoHash: hash,
