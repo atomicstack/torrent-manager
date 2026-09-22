@@ -619,7 +619,11 @@ func (h *handler) confirmRuleMatched(w http.ResponseWriter, ctx context.Context,
 //
 // Meta is the parsed torrent payload (size + counts), populated only after
 // the ✨ click has fetched + parsed the .torrent. nil on the initial modal
-// render. OOB toggles the hx-swap-oob="true" attribute on the metadata dl
+// render. AutoClassify flags the ✨ button so the client starts the
+// classify stream as soon as the modal lands, without a click. It is only
+// set on the initial modal render — never on the classify response's
+// form-row — so the swapped-in row can't re-trigger itself.
+// OOB toggles the hx-swap-oob="true" attribute on the metadata dl
 // — set true when rendering the dl as part of the classify response so it
 // replaces the dl already in the modal.
 type confirmNoRuleData struct {
@@ -629,6 +633,7 @@ type confirmNoRuleData struct {
 	ClaudePicked    bool
 	AutoPickFailed  bool
 	ClaudeAvailable bool
+	AutoClassify    bool
 	CommonRoot      string
 	Completions     []string
 	Meta            *torrentMeta
@@ -699,10 +704,12 @@ func (h *handler) confirmNoRule(w http.ResponseWriter, ctx context.Context, it a
 			// movies just live under roots.Movies — no subdir convention.
 			data.ProposedSaveDir = h.stripPrefix(h.roots.Movies)
 		case "tv":
-			// Leave the field empty; the user clicks the claude icon to populate
-			// it (or types something themselves). ClaudeAvailable controls the
-			// icon's presence.
+			// Leave the field empty and kick off the claude classify as soon
+			// as the modal opens (fetch + parse + pick run over sse). the ✨
+			// icon stays for a manual re-run; ClaudeAvailable controls its
+			// presence.
 			data.ClaudeAvailable = h.ai != nil
+			data.AutoClassify = data.ClaudeAvailable
 		default:
 			// "other" / unknown: empty field, no icon.
 		}
@@ -711,6 +718,7 @@ func (h *handler) confirmNoRule(w http.ResponseWriter, ctx context.Context, it a
 	// point re-classifying a torrent that's already on disk.
 	if it.Enqueued {
 		data.ClaudeAvailable = false
+		data.AutoClassify = false
 	}
 	// meta on the seedctl items row is the persistent cache — see comment
 	// in confirmRuleMatched for details.

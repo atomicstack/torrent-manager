@@ -291,6 +291,18 @@
   // the form-row-block the user clicked from. all step transitions are
   // driven by real backend progress — no CSS time-based animations.
   var classifyES = null;  // single in-flight EventSource per page
+
+  // no-rule tv modals flag their ✨ button with data-auto-classify so the
+  // classify starts the moment the modal is swapped in, rather than
+  // waiting for a click. the classify response's form-row never carries
+  // the flag, so this can't loop.
+  document.addEventListener('htmx:load', function (ev) {
+    var root = ev.detail && ev.detail.elt;
+    if (!root || !root.querySelector) return;
+    var btn = root.matches && root.matches('.btn-classify[data-auto-classify]')
+      ? root : root.querySelector('.btn-classify[data-auto-classify]');
+    if (btn) startClassify(btn);
+  });
   function startClassify(btn) {
     var formRowBlock = btn.closest('.form-row-block');
     if (!formRowBlock) return;
