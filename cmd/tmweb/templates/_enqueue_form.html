@@ -6,11 +6,10 @@
   {{- if eq .Category "movies"}}<p class="modal-note">movies have no subdir convention — edit if you want a per-title subdir.</p>{{end -}}
   {{template "_enqueue_form_row.html" .}}
   {{template "_enqueue_progress.html" .}}
-  {{- if .Completions -}}
+  {{- /* always rendered: deeper levels are fetched into it as you type (see layout.html) */ -}}
   <datalist id="path-completions">
     {{- range .Completions -}}<option value="{{.}}">{{- end -}}
   </datalist>
-  {{- end -}}
   <div class="modal-actions">
     <button type="button" class="btn-cancel"
             hx-on:click="document.getElementById('modal').innerHTML=''">cancel</button>

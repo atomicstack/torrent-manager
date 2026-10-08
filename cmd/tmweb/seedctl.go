@@ -162,9 +162,20 @@ func (s *Seedctl) GetTorrentStatus(ctx context.Context, hash string) (api.Torren
 // surfaced as an empty list + nil error so callers can fall through to the
 // "user enters it manually" path without a special-case error type.
 func (s *Seedctl) ListDirs(ctx context.Context, rootName string) (api.DirsListResponse, error) {
+	return s.ListSubdirs(ctx, rootName, "")
+}
+
+// ListSubdirs is ListDirs one or more levels down: it lists the immediate
+// subdirs of <root>/<sub>, where sub is a slash-separated relative path ("" =
+// the root itself). Same 404 → empty-list semantics as ListDirs.
+func (s *Seedctl) ListSubdirs(ctx context.Context, rootName, sub string) (api.DirsListResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	u := fmt.Sprintf("%s/v1/dirs?root=%s", s.base, url.QueryEscape(rootName))
+	q := url.Values{"root": {rootName}}
+	if sub != "" {
+		q.Set("sub", sub)
+	}
+	u := fmt.Sprintf("%s/v1/dirs?%s", s.base, q.Encode())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return api.DirsListResponse{}, fmt.Errorf("seedctl GET %s: build request: %w", u, err)

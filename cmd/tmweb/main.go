@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -238,9 +239,8 @@ func deriveHomePrefix(commonRoot string) string {
 // "movies/Blade Runner 2049"). Used to populate the modal's autocomplete
 // datalist. Failures are silent — autocomplete is optional UX.
 func (h *handler) collectCompletions(ctx context.Context) []string {
-	roots := []string{"tv", "movies"}
 	var out []string
-	for _, r := range roots {
+	for _, r := range completionRoots {
 		resp, err := h.seedctl.ListDirs(ctx, r)
 		if err != nil {
 			continue
@@ -250,6 +250,52 @@ func (h *handler) collectCompletions(ctx context.Context) []string {
 		}
 	}
 	return out
+}
+
+// completionRoots are the root names whose dirs feed save_dir completion.
+// they double as the first path segment of the relative save_dir the modal
+// shows ("tv/severance/season2").
+var completionRoots = []string{"tv", "movies"}
+
+// dirCompletions serves GET /api/dir-completions?save_dir=<partial>. the
+// modal's datalist only carries the first level under each root, so the
+// client calls this whenever the directory part of the typed value changes
+// and swaps the returned entries in. everything up to the last "/" names the
+// dir to list; the trailing partial segment is left for the browser to
+// filter on. no "/" yet → the first level under every root.
+func (h *handler) dirCompletions(w http.ResponseWriter, req *http.Request) {
+	partial := req.URL.Query().Get("save_dir")
+	i := strings.LastIndex(partial, "/")
+	if i < 0 {
+		writeJSON(w, http.StatusOK, api.DirsListResponse{Dirs: nonNil(h.collectCompletions(req.Context()))})
+		return
+	}
+	dir := partial[:i]
+	root, sub, _ := strings.Cut(dir, "/")
+	if !slices.Contains(completionRoots, root) {
+		writeJSON(w, http.StatusOK, api.DirsListResponse{Dirs: []string{}})
+		return
+	}
+	resp, err := h.seedctl.ListSubdirs(req.Context(), root, sub)
+	if err != nil {
+		// optional ux, same as collectCompletions: an error just means no
+		// suggestions (seedctl 400s on "..", hidden or empty components).
+		slog.Debug("dir_completions_failed", "dir", dir, "err", err)
+		writeJSON(w, http.StatusOK, api.DirsListResponse{Dirs: []string{}})
+		return
+	}
+	out := make([]string, 0, len(resp.Dirs))
+	for _, d := range resp.Dirs {
+		out = append(out, dir+"/"+d)
+	}
+	writeJSON(w, http.StatusOK, api.DirsListResponse{Dirs: out})
+}
+
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 // feedCategoryMap builds a feed-name -> category lookup ("tv" | "movies" |
@@ -349,6 +395,7 @@ func newMux(
 	mux.HandleFunc("GET /api/enqueue-confirm", h.enqueueConfirm)
 	mux.HandleFunc("GET /api/enqueue-classify", h.enqueueClassify)
 	mux.HandleFunc("POST /api/enqueue", h.enqueueDo)
+	mux.HandleFunc("GET /api/dir-completions", h.dirCompletions)
 	mux.HandleFunc("GET /api/import-form", h.importForm)
 	mux.HandleFunc("POST /api/import", h.importDo)
 	mux.Handle("GET /static/", staticHandler())

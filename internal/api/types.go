@@ -103,8 +103,9 @@ type ItemsListResponse struct {
 	Total int          `json:"total,omitempty"`
 }
 
-// DirsListResponse is the reply for GET /v1/dirs?root=<name>. The names are
-// immediate subdirectory basenames under the configured root, hidden entries
+// DirsListResponse is the reply for GET /v1/dirs?root=<name>[&sub=<rel>]. The
+// names are immediate subdirectory basenames under the configured root (or
+// <root>/<sub> when sub is given), hidden entries
 // (those with a leading ".") excluded, sorted ascending.
 type DirsListResponse struct {
 	Dirs []string `json:"dirs"`

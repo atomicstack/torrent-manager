@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -105,4 +106,39 @@ func TestListDirs_EmptyDirReturnsEmptyList(t *testing.T) {
 	var resp api.DirsListResponse
 	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
 	assert.Empty(t, resp.Dirs)
+}
+
+// TestListDirs_SubListsNestedLevel covers the deep-completion path: sub= names
+// a relative path under the root and the handler lists that dir's children.
+func TestListDirs_SubListsNestedLevel(t *testing.T) {
+	h := newTestDirsHandler(t, map[string][]string{
+		"tv": {"only.connect/season2", "only.connect/season1", "beef"},
+	})
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest("GET", "/v1/dirs?root=tv&sub=only.connect", nil))
+	require.Equal(t, 200, rr.Code)
+	var resp api.DirsListResponse
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	assert.Equal(t, []string{"season1", "season2"}, resp.Dirs)
+}
+
+func TestListDirs_SubMissingIsEmpty(t *testing.T) {
+	h := newTestDirsHandler(t, map[string][]string{"tv": {"beef"}})
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest("GET", "/v1/dirs?root=tv&sub=nope/deeper", nil))
+	require.Equal(t, 200, rr.Code)
+	var resp api.DirsListResponse
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&resp))
+	assert.Empty(t, resp.Dirs)
+}
+
+// TestListDirs_SubRejectsEscapes makes sure sub= can't climb out of the root
+// or reach hidden dirs.
+func TestListDirs_SubRejectsEscapes(t *testing.T) {
+	h := newTestDirsHandler(t, map[string][]string{"tv": {"beef", ".hidden/x"}})
+	for _, sub := range []string{"..", "../..", "beef/../..", "/etc", ".hidden", "beef//x", "./beef"} {
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, httptest.NewRequest("GET", "/v1/dirs?root=tv&sub="+url.QueryEscape(sub), nil))
+		assert.Equal(t, http.StatusBadRequest, rr.Code, "sub=%q", sub)
+	}
 }

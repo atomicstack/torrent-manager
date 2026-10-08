@@ -296,6 +296,38 @@
   // classify starts the moment the modal is swapped in, rather than
   // waiting for a click. the classify response's form-row never carries
   // the flag, so this can't loop.
+  // save_dir completion: the server-rendered datalist only holds the first
+  // level under each root. whenever the directory part of the typed value
+  // (everything up to the last "/") changes, fetch that dir's children and
+  // swap them in; the browser filters on the trailing partial segment.
+  (function () {
+    function refresh(input) {
+      var list = input.list;
+      if (!list) return;
+      var v = input.value, i = v.lastIndexOf('/');
+      var dir = i < 0 ? '' : v.slice(0, i);
+      if (input.dataset.completionsFor === dir) return;
+      input.dataset.completionsFor = dir;
+      fetch('/api/dir-completions?save_dir=' + encodeURIComponent(v))
+        .then(function (r) { return r.ok ? r.json() : { dirs: [] }; })
+        .then(function (body) {
+          if (input.dataset.completionsFor !== dir) return; // stale reply
+          list.replaceChildren.apply(list, (body.dirs || []).map(function (d) {
+            var o = document.createElement('option');
+            o.value = d;
+            return o;
+          }));
+        })
+        .catch(function () {});
+    }
+    function onEvent(ev) {
+      var el = ev.target;
+      if (el && el.matches && el.matches('input[name="save_dir"][list]')) refresh(el);
+    }
+    document.addEventListener('input', onEvent);
+    document.addEventListener('focusin', onEvent);
+  })();
+
   document.addEventListener('htmx:load', function (ev) {
     var root = ev.detail && ev.detail.elt;
     if (!root || !root.querySelector) return;

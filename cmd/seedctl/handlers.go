@@ -266,6 +266,11 @@ func (h *handler) exportItems(w http.ResponseWriter, r *http.Request) {
 //     configured and have tmweb degrade gracefully).
 //   - configured root whose path doesn't exist on disk -> 200 with an empty
 //     list, treating it as a fresh root the caller can drop into.
+//   - optional sub=<rel/path> lists a nested dir under the root instead (used
+//     by tmweb's save_dir completion to walk deeper than the first level).
+//     sub must be a plain relative path — no "..", ".", empty or hidden
+//     components — or the request is a 400. a sub that doesn't exist on disk
+//     is a 200 with an empty list, same as a missing root.
 //   - we never echo the absolute path back; only the basename of each subdir.
 func (h *handler) listDirs(w http.ResponseWriter, r *http.Request) {
 	name := r.URL.Query().Get("root")
@@ -273,6 +278,13 @@ func (h *handler) listDirs(w http.ResponseWriter, r *http.Request) {
 	if !ok || path == "" {
 		http.Error(w, "unknown root", http.StatusNotFound)
 		return
+	}
+	if sub := r.URL.Query().Get("sub"); sub != "" {
+		if !validSubdir(sub) {
+			http.Error(w, "bad sub", http.StatusBadRequest)
+			return
+		}
+		path = filepath.Join(path, filepath.FromSlash(sub))
 	}
 	entries, err := os.ReadDir(path)
 	if err != nil {
@@ -297,6 +309,21 @@ func (h *handler) listDirs(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Strings(dirs)
 	writeJSON(w, http.StatusOK, api.DirsListResponse{Dirs: dirs})
+}
+
+// validSubdir reports whether sub is a plain slash-separated relative path
+// whose every component is a real, non-hidden name. rejecting "..", "." and
+// empty components up front keeps the join lexically inside the root.
+func validSubdir(sub string) bool {
+	if strings.HasPrefix(sub, "/") || strings.Contains(sub, "\\") {
+		return false
+	}
+	for _, part := range strings.Split(sub, "/") {
+		if part == "" || strings.HasPrefix(part, ".") {
+			return false
+		}
+	}
+	return true
 }
 
 func itemRowsToRecords(in []itemsdb.Item) []api.ItemRecord {
