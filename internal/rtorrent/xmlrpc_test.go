@@ -34,6 +34,16 @@ func TestXMLRPCDecode_I4Response(t *testing.T) {
 	assert.Equal(t, "1", v)
 }
 
+// rtorrent 0.9.8 returns 64-bit integers (d.complete, d.size_bytes, …) as
+// <i8>, captured verbatim from the seedbox. decoding it as "" made GetStatus
+// report every torrent as incomplete.
+func TestXMLRPCDecode_I8Response(t *testing.T) {
+	resp := []byte("Status: 200 OK\r\nContent-Type: text/xml\r\n\r\n<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<methodResponse>\n<params>\n<param><value><i8>1</i8></value></param>\n</params>\n</methodResponse>")
+	v, err := decodeXMLRPCResponse(resp)
+	require.NoError(t, err)
+	assert.Equal(t, "1", v)
+}
+
 func TestXMLRPCDecode_FaultResponse(t *testing.T) {
 	resp := []byte("Content-Type: text/xml\r\n\r\n<methodResponse><fault><value><struct><member><name>faultCode</name><value><i4>-501</i4></value></member><member><name>faultString</name><value><string>Could not create download</string></value></member></struct></value></fault></methodResponse>")
 	_, err := decodeXMLRPCResponse(resp)

@@ -62,6 +62,7 @@ func decodeXMLRPCResponse(raw []byte) (string, error) {
 	type valueT struct {
 		String string `xml:"string"`
 		I4     string `xml:"i4"`
+		I8     string `xml:"i8"` // rtorrent 0.9.8 sends 64-bit ints as <i8>
 		Int    string `xml:"int"`
 	}
 	type memberT struct {
@@ -96,7 +97,7 @@ func decodeXMLRPCResponse(raw []byte) (string, error) {
 		for _, m := range r.Fault.Value.Struct.Members {
 			switch m.Name {
 			case "faultCode":
-				code = firstNonEmpty(m.Value.I4, m.Value.Int, m.Value.String)
+				code = firstNonEmpty(m.Value.I4, m.Value.I8, m.Value.Int, m.Value.String)
 			case "faultString":
 				msg = m.Value.String
 			}
@@ -107,7 +108,7 @@ func decodeXMLRPCResponse(raw []byte) (string, error) {
 		return "", nil
 	}
 	v := r.Params.Param.Value
-	return firstNonEmpty(v.String, v.I4, v.Int), nil
+	return firstNonEmpty(v.String, v.I4, v.I8, v.Int), nil
 }
 
 func firstNonEmpty(ss ...string) string {
@@ -131,6 +132,7 @@ func decodeXMLRPCResponseStringMatrix(raw []byte) ([][]string, error) {
 	type cellT struct {
 		String string `xml:"string"`
 		I4     string `xml:"i4"`
+		I8     string `xml:"i8"` // rtorrent 0.9.8 sends 64-bit ints as <i8>
 		Int    string `xml:"int"`
 	}
 	type rowDataT struct {
@@ -156,6 +158,7 @@ func decodeXMLRPCResponseStringMatrix(raw []byte) ([][]string, error) {
 	type valueT struct {
 		String string `xml:"string"`
 		I4     string `xml:"i4"`
+		I8     string `xml:"i8"` // rtorrent 0.9.8 sends 64-bit ints as <i8>
 		Int    string `xml:"int"`
 	}
 	type memberT struct {
@@ -187,7 +190,7 @@ func decodeXMLRPCResponseStringMatrix(raw []byte) ([][]string, error) {
 		for _, m := range r.Fault.Value.Struct.Members {
 			switch m.Name {
 			case "faultCode":
-				code = firstNonEmpty(m.Value.I4, m.Value.Int, m.Value.String)
+				code = firstNonEmpty(m.Value.I4, m.Value.I8, m.Value.Int, m.Value.String)
 			case "faultString":
 				msg = m.Value.String
 			}
@@ -201,7 +204,7 @@ func decodeXMLRPCResponseStringMatrix(raw []byte) ([][]string, error) {
 	for _, row := range r.Params.Param.Value.Array.Data.Values {
 		cells := make([]string, 0, len(row.Array.Data.Values))
 		for _, cell := range row.Array.Data.Values {
-			cells = append(cells, firstNonEmpty(cell.String, cell.I4, cell.Int))
+			cells = append(cells, firstNonEmpty(cell.String, cell.I4, cell.I8, cell.Int))
 		}
 		out = append(out, cells)
 	}
@@ -219,6 +222,7 @@ func decodeXMLRPCResponseStringArray(raw []byte) ([]string, error) {
 	type valueT struct {
 		String string `xml:"string"`
 		I4     string `xml:"i4"`
+		I8     string `xml:"i8"` // rtorrent 0.9.8 sends 64-bit ints as <i8>
 		Int    string `xml:"int"`
 	}
 	type memberT struct {
@@ -261,7 +265,7 @@ func decodeXMLRPCResponseStringArray(raw []byte) ([]string, error) {
 		for _, m := range r.Fault.Value.Struct.Members {
 			switch m.Name {
 			case "faultCode":
-				code = firstNonEmpty(m.Value.I4, m.Value.Int, m.Value.String)
+				code = firstNonEmpty(m.Value.I4, m.Value.I8, m.Value.Int, m.Value.String)
 			case "faultString":
 				msg = m.Value.String
 			}
@@ -273,7 +277,7 @@ func decodeXMLRPCResponseStringArray(raw []byte) ([]string, error) {
 	}
 	out := make([]string, 0, len(r.Params.Param.Value.Array.Data.Values))
 	for _, v := range r.Params.Param.Value.Array.Data.Values {
-		s := firstNonEmpty(v.String, v.I4, v.Int)
+		s := firstNonEmpty(v.String, v.I4, v.I8, v.Int)
 		if s != "" {
 			out = append(out, s)
 		}
