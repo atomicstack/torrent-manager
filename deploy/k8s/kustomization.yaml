@@ -9,5 +9,6 @@ resources:
   - tmweb-deployment.yaml
   - tmweb-service.yaml
   - tmweb-ingress.yaml
+  - tmnotify-deployment.yaml
 
 # secrets are NOT included here; create them via kubectl as documented in secret.example.yaml.

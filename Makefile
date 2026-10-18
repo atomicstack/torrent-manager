@@ -1,4 +1,4 @@
-.PHONY: help build build-tmgr build-seedctl build-tmweb test test-integration lint certs image image-local image-import image-local-tmweb image-import-tmweb push deploy deploy-seedhost install-mdns clean
+.PHONY: help build build-tmgr build-seedctl build-tmweb build-tmnotify test test-integration lint certs image image-local image-import image-local-tmweb image-import-tmweb image-local-tmnotify image-import-tmnotify push deploy deploy-seedhost install-mdns clean
 
 # Local overrides for hostnames + image registry. Keep your real seedbox /
 # cluster names out of the committed Makefile — drop them into Makefile.local
@@ -17,13 +17,14 @@ IMAGE ?= ghcr.io/atomicstack/tmgr
 TAG ?= dev
 LOCAL_IMAGE ?= docker.io/local/tmgr:latest
 LOCAL_IMAGE_TMWEB ?= docker.io/local/tmweb:latest
+LOCAL_IMAGE_TMNOTIFY ?= docker.io/local/tmnotify:latest
 K3S_NODES ?= node-1.local node-2.local
 MDNS_NODE ?= node-1.local
 
 help: ## list targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' Makefile | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-build: build-tmgr build-seedctl build-tmweb ## build all binaries for the local host
+build: build-tmgr build-seedctl build-tmweb build-tmnotify ## build all binaries for the local host
 
 build-tmgr: ## build tmgr (cross-compile arm64 for k3s)
 	mkdir -p dist
@@ -36,6 +37,10 @@ build-seedctl: ## build seedctl (cross-compile amd64 for the seedbox)
 build-tmweb: ## build tmweb (cross-compile arm64 for k3s; no cgo — pure http client)
 	mkdir -p dist
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o dist/tmweb-linux-arm64 ./cmd/tmweb
+
+build-tmnotify: ## build tmnotify (cross-compile arm64 for k3s; no cgo — http + mqtt client)
+	mkdir -p dist
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o dist/tmnotify-linux-arm64 ./cmd/tmnotify
 
 test: ## run unit tests
 	go test -tags=sqlite_fts5 -race ./...
@@ -77,6 +82,18 @@ image-import-tmweb: image-local-tmweb ## scp dist/tmweb-image.tar and import on 
 	  echo "==> $$h"; \
 	  scp -q dist/tmweb-image.tar matt@$$h:/tmp/tmweb-image.tar && \
 	  ssh matt@$$h "sudo /usr/local/bin/k3s ctr images import /tmp/tmweb-image.tar"; \
+	done
+
+image-local-tmnotify: ## build tmnotify arm64 image into dist/tmnotify-image.tar (podman)
+	mkdir -p dist
+	podman build --platform=linux/arm64 -t $(LOCAL_IMAGE_TMNOTIFY) -f Dockerfile.tmnotify .
+	podman save --format docker-archive -o dist/tmnotify-image.tar $(LOCAL_IMAGE_TMNOTIFY)
+
+image-import-tmnotify: image-local-tmnotify ## scp dist/tmnotify-image.tar and import on each k3s node
+	@for h in $(K3S_NODES); do \
+	  echo "==> $$h"; \
+	  scp -q dist/tmnotify-image.tar matt@$$h:/tmp/tmnotify-image.tar && \
+	  ssh matt@$$h "sudo /usr/local/bin/k3s ctr images import /tmp/tmnotify-image.tar"; \
 	done
 
 deploy: ## apply k8s manifests

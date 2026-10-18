@@ -1,0 +1,18 @@
+# build stage — tmnotify has no cgo (http client to seedctl + mqtt client), so we can
+# static-link and ship from scratch.
+FROM golang:1.26-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG TARGETARCH=arm64
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH \
+    go build -ldflags="-s -w" -o /out/tmnotify ./cmd/tmnotify
+
+# runtime stage — scratch + ca-certificates is all we need (kept for parity
+# with tmweb; seedctl itself is verified against the mtls ca).
+FROM scratch
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=build /out/tmnotify /tmnotify
+USER 65532:65532
+ENTRYPOINT ["/tmnotify"]
