@@ -205,6 +205,27 @@ func runMigrations(sdb *sql.DB) error {
 			}
 		}
 	}
+	// completion tracking columns on enqueues. backfill notified_at on rows
+	// that predate the feature so turning it on doesn't announce the whole
+	// back catalogue. gated on notified_at's absence, so it runs exactly once.
+	var hasNotified int
+	if err := sdb.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('enqueues') WHERE name = 'notified_at'`,
+	).Scan(&hasNotified); err != nil {
+		return fmt.Errorf("probe notified_at column: %w", err)
+	}
+	if hasNotified == 0 {
+		for _, stmt := range []string{
+			`ALTER TABLE enqueues ADD COLUMN completed_at INTEGER`,
+			`ALTER TABLE enqueues ADD COLUMN notified_at INTEGER`,
+			`ALTER TABLE enqueues ADD COLUMN torrent_name TEXT`,
+			`UPDATE enqueues SET notified_at = CAST(strftime('%s', 'now') AS INTEGER)`,
+		} {
+			if _, err := sdb.Exec(stmt); err != nil {
+				return fmt.Errorf("migrate enqueues completion columns: %w", err)
+			}
+		}
+	}
 	return nil
 }
 
@@ -255,7 +276,10 @@ CREATE TABLE IF NOT EXISTS enqueues (
   feed_name    TEXT, guid TEXT,
   title        TEXT, save_dir TEXT,
   source       TEXT NOT NULL,
-  enqueued_at  INTEGER NOT NULL
+  enqueued_at  INTEGER NOT NULL,
+  completed_at INTEGER,
+  notified_at  INTEGER,
+  torrent_name TEXT
 );
 `
 
@@ -521,9 +545,12 @@ func (d *DB) RecordEnqueue(ctx context.Context, e Enqueue) error {
 INSERT INTO enqueues (info_hash, feed_name, guid, title, save_dir, source, enqueued_at)
 VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(info_hash) DO UPDATE SET
-  save_dir    = excluded.save_dir,
-  source      = excluded.source,
-  enqueued_at = excluded.enqueued_at
+  save_dir     = excluded.save_dir,
+  source       = excluded.source,
+  enqueued_at  = excluded.enqueued_at,
+  completed_at = NULL,
+  notified_at  = NULL,
+  torrent_name = NULL
 `, e.InfoHash, e.FeedName, e.GUID, e.Title, e.SaveDir, e.Source, e.EnqueuedAt.Unix())
 	return err
 }

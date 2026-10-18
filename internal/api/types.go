@@ -110,3 +110,20 @@ type ItemsListResponse struct {
 type DirsListResponse struct {
 	Dirs []string `json:"dirs"`
 }
+
+// Completion is one finished enqueue, streamed by seedctl on
+// GET /v1/completions/stream (sse, `event: completion`) until a client acks
+// it via POST /v1/completions/ack. Name is rtorrent's d.name; Title is the
+// feed item's title when the hash is in the items index (may be empty).
+type Completion struct {
+	InfoHash   string `json:"info_hash"`
+	Name       string `json:"name"`
+	Title      string `json:"title,omitempty"`
+	SaveDir    string `json:"save_dir"`
+	FinishedAt int64  `json:"finished_at"` // unix seconds, when seedctl saw it complete
+}
+
+// CompletionAckRequest is the body of POST /v1/completions/ack.
+type CompletionAckRequest struct {
+	Hashes []string `json:"hashes"`
+}
