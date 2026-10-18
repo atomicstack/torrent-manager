@@ -9,6 +9,7 @@ automated rss → rtorrent pipeline. a k3s CronJob polls a private tracker's rss
 
 - `cmd/seedctl/` — long-lived mtls http server on the seed host. proxies a narrow API (`POST /v1/torrents`, `GET /v1/torrents/{hash}`, `GET /healthz`) into rtorrent's xmlrpc-over-scgi.
 - `cmd/tmgr/` — one-shot CronJob binary. polls feeds, matches, dedups via seedctl, enqueues new items.
+- `cmd/tmnotify/` — long-running k3s deployment. follows seedctl's completion stream (`GET /v1/completions/stream`, sse over mtls) and publishes a "download complete" message to an mqtt broker (e.g. home assistant) for every enqueued torrent that finishes.
 - `internal/{api,rtorrent,feed,tlsx}/` — shared packages.
 - `scripts/make-certs.sh` — openssl cert generator.
 - `scripts/migrate-rutorrent.py` — one-shot rutorrent rss-manager → watchlist.yaml.
@@ -52,6 +53,13 @@ kubectl --kubeconfig ~/.kube/rpi-sandbox.yaml -n torrent-manager \
 kubectl --kubeconfig ~/.kube/rpi-sandbox.yaml -n torrent-manager \
   create secret generic tmgr-anthropic \
   --from-literal=ANTHROPIC_API_KEY='<paste key>'
+
+# only needed for tmnotify. use the broker's ip: pods can't resolve .local names.
+kubectl --kubeconfig ~/.kube/rpi-sandbox.yaml -n torrent-manager \
+  create secret generic tmgr-mqtt \
+  --from-literal=MQTT_URL='tcp://<broker ip>:1883' \
+  --from-literal=MQTT_USERNAME='<user>' \
+  --from-literal=MQTT_PASSWORD='<password>'
 ```
 
 edit `deploy/k8s/configmap.yaml` so `seedctl_url`, `roots`, `shows[]`, and `feeds[]` reflect your setup. for feeds that require authentication, add `cookie_env: YOUR_ENV_VAR_NAME` and ensure that key exists in the `tmgr-cookies` secret.
@@ -133,6 +141,23 @@ kubectl --kubeconfig ~/.kube/rpi-sandbox.yaml -n torrent-manager \
 kubectl --kubeconfig ~/.kube/rpi-sandbox.yaml -n torrent-manager logs job/tmgr-smoke -f
 ```
 
+### completion notifications (tmnotify)
+
+seedctl checks rtorrent every 10s for enqueued torrents that haven't finished, and streams each completion to tmnotify, which publishes it to `MQTT_TOPIC` (default `torrent-manager/complete`) at qos 1, not retained:
+
+```json
+{"info_hash": "…", "name": "Some.Show.S01E01.1080p", "title": "…", "save_dir": "tv/some.show/season1", "finished_at": 1760000000}
+```
+
+only torrents enqueued by tmgr or tmweb are announced; enqueues that predate the feature are marked as already announced. completions are acked after a successful publish and replayed after any disconnect, so a notification may occasionally arrive twice but won't be lost. run one replica only.
+
+```
+make image-import-tmnotify
+kubectl --kubeconfig ~/.kube/rpi-sandbox.yaml -n torrent-manager apply -f deploy/k8s/tmnotify-deployment.yaml
+```
+
+to show it on a display, add a home assistant automation with an mqtt trigger on the topic that forwards `name` wherever you like.
+
 ### 6. updating the watchlist
 
 ```
@@ -160,12 +185,13 @@ make image                # build the tmgr container image
 ## layout
 
 ```
-cmd/{seedctl,tmgr}/        # binary entrypoints
+cmd/{seedctl,tmgr,tmweb,tmnotify}/  # binary entrypoints
 internal/                  # shared packages
   api/                     # http+json wire types
   rtorrent/                # scgi + xmlrpc client
   feed/                    # rss parsing, regex matching, info hash extraction
   tlsx/                    # mtls config loaders + test cert generator
+  notify/                  # completion stream subscriber + mqtt publisher
 scripts/
   make-certs.sh            # openssl cert generation
   migrate-rutorrent.py     # one-shot rutorrent → watchlist.yaml

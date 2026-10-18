@@ -9,7 +9,7 @@ from the source alone.
 torrent-manager: a small system that ingests rss torrent feeds, indexes the
 items in sqlite, matches them against a yaml watchlist, and enqueues matches
 (plus user-driven manual picks) into rtorrent via a seedbox-side bridge.
-three binaries cooperate over mtls.
+four binaries cooperate over mtls.
 
 ## components
 
@@ -25,6 +25,10 @@ three binaries cooperate over mtls.
   on :18443. wraps rtorrent (scgi). owns the sqlite items index.
 - **cmd/tmweb** — k3s web ui (port :8080, lan-only). htmx + sse. serves
   search + manual enqueue with an ai-assisted "no rule" path.
+- **cmd/tmnotify** — k3s deployment (exactly 1 replica, `Recreate`).
+  follows seedctl's `GET /v1/completions/stream` and publishes each
+  finished enqueue to the home assistant mqtt broker, then acks it via
+  `POST /v1/completions/ack`. config from the `tmgr-mqtt` secret.
 
 leaf packages under `internal/` follow standard go layout. quick reference:
 
@@ -33,7 +37,8 @@ leaf packages under `internal/` follow standard go layout. quick reference:
 | aiclassify        | anthropic sdk wrapper. `PickDir` (opus 4.7) for the modal classify; `Classify` (opus 4.7) for tmgr background fallback. |
 | api               | shared request/response types across binaries.    |
 | feed              | rss item types, info-hash helpers.                |
-| itemsdb           | sqlite items index + FTS5 search. requires `-tags=sqlite_fts5`. |
+| itemsdb           | sqlite items index + FTS5 search. requires `-tags=sqlite_fts5`. also completion state on `enqueues`. |
+| notify            | completion stream subscriber + mqtt publisher (tmnotify). |
 | rtorrent          | scgi client (seedctl only).                       |
 | savedir           | derive save_dir from rule + title.                |
 | tlsx              | mtls client/server config helpers.                |
@@ -74,6 +79,9 @@ leaf packages under `internal/` follow standard go layout. quick reference:
   ```
 
 - **tmgr**: `make image-import` then rollout the deployment.
+- **tmnotify**: `make image-import-tmnotify` (sudoers on the pis covers
+  `/tmp/tmnotify-image.tar` too), then `rollout restart deploy/tmnotify`.
+  deploy seedctl first when the stream/ack api changes.
 - **seedctl**: `make deploy-seedhost` — scp+ssh, builds the binary on the
   seedbox via go (avoids cgo cross-compile issues), drops it at
   `/home/seedbox/bin/seedctl` along with the certs.
@@ -229,6 +237,25 @@ through it.** two watchlist rules have spaces in `directory:`
 rutorrent, *not* by seedctl — useful for telling a failed enqueue that
 someone later cleaned up from one that worked.
 
+### completion notifications
+
+- seedctl's detector (`cmd/seedctl/completions.go`) polls rtorrent every
+  10s, but only for `enqueues` rows with `completed_at` and `notified_at`
+  both null — a handful of scgi calls. state machine lives in
+  `internal/itemsdb/completions.go`: pending → completed (streamed until
+  acked) → notified. a hash rtorrent no longer knows is retired without an
+  announcement. re-enqueueing a hash resets it to pending.
+- the migration that added these columns backfilled `notified_at` on every
+  existing row, so only enqueues made after it are ever announced.
+- the stream subscribes before reading the backlog, so a completion can be
+  delivered twice; tmnotify dedupes by hash for an hour and acks only after
+  a successful publish (at-least-once).
+- **sse through seedctl's middleware**: `withGzip` skips compression for
+  `text/event-stream` responses, and both wrappers implement `Unwrap` so
+  `http.ResponseController.Flush` reaches the connection. any new streaming
+  endpoint relies on this — don't add a wrapper without `Unwrap`/`Flush`.
+- the broker url must be an ip: k3s pods can't resolve mDNS `.local` names.
+
 ### torrent cache
 
 `cmd/tmweb/torrentcache.go` — in-memory ttl cache bridging the classify
@@ -296,6 +323,7 @@ i.id ASC` (bm25 first, then date as a tiebreaker).
 ```
 cmd/
   tmgr/           — k3s daemon, feed polling + rule matching
+  tmnotify/       — k3s deployment, completion stream → mqtt
   tmweb/          — k3s web ui
     static/       — vendored htmx + app.css (embedded)
     templates/    — html templates (embedded)
@@ -305,6 +333,7 @@ internal/
   api/            — shared request/response types
   feed/           — rss types, hash helpers
   itemsdb/        — sqlite + FTS5
+  notify/         — completion stream subscriber + mqtt publisher
   rtorrent/       — scgi client (seedctl only)
   savedir/        — derive save_dir from rule + title
   tlsx/           — mtls client/server helpers
