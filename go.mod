@@ -5,6 +5,7 @@ go 1.26.3
 require (
 	github.com/anacrolix/torrent v1.61.0
 	github.com/anthropics/anthropic-sdk-go v1.43.0
+	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/mattn/go-sqlite3 v1.14.22
 	github.com/mmcdole/gofeed v1.3.0
 	github.com/stretchr/testify v1.11.1
@@ -20,6 +21,7 @@ require (
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/huandu/xstrings v1.3.2 // indirect
 	github.com/invopop/jsonschema v0.13.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
