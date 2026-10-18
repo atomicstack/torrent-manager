@@ -39,11 +39,19 @@ type handler struct {
 	// whose immediate subdirectories are listable via GET /v1/dirs. Nil or
 	// empty map disables the endpoint — all roots respond 404.
 	roots map[string]string
+	// hub fans completions found by the detector out to stream subscribers.
+	hub *completionHub
 }
 
 func newHandler(c rtorrentClient, items *itemsdb.DB, restartCh chan<- struct{}, roots map[string]string) http.Handler {
+	return newHandlerWithHub(c, items, restartCh, roots, newCompletionHub())
+}
+
+// newHandlerWithHub is newHandler sharing a completion hub with the detector
+// goroutine main runs alongside the server.
+func newHandlerWithHub(c rtorrentClient, items *itemsdb.DB, restartCh chan<- struct{}, roots map[string]string, hub *completionHub) http.Handler {
 	mux := http.NewServeMux()
-	h := &handler{c: c, items: items, restartCh: restartCh, roots: roots}
+	h := &handler{c: c, items: items, restartCh: restartCh, roots: roots, hub: hub}
 	mux.HandleFunc("GET /healthz", h.healthz)
 	mux.HandleFunc("GET /v1/torrents", h.listTorrents)
 	mux.HandleFunc("GET /v1/torrents/{hash}", h.getTorrent)
@@ -53,6 +61,8 @@ func newHandler(c rtorrentClient, items *itemsdb.DB, restartCh chan<- struct{}, 
 	mux.HandleFunc("GET /v1/items", h.listItems)
 	mux.HandleFunc("GET /v1/items/export", h.exportItems)
 	mux.HandleFunc("GET /v1/dirs", h.listDirs)
+	mux.HandleFunc("GET /v1/completions/stream", h.completionStream)
+	mux.HandleFunc("POST /v1/completions/ack", h.completionAck)
 	mux.HandleFunc("POST /v1/admin/restart", h.adminRestart)
 	return mux
 }

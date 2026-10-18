@@ -84,13 +84,14 @@ func main() {
 	}
 
 	restartCh := make(chan struct{}, 1)
+	hub := newCompletionHub()
 	srv := &http.Server{
 		Addr: cfg.Listen,
 		// withLogging wraps the outside so req_bytes/resp_bytes count actual
 		// wire bytes (post-gzip). withGzip decompresses request bodies sent
 		// with Content-Encoding: gzip and compresses responses when the client
 		// advertises Accept-Encoding: gzip.
-		Handler:           withLogging(withGzip(newHandler(client, items, restartCh, cfg.Roots))),
+		Handler:           withLogging(withGzip(newHandlerWithHub(client, items, restartCh, cfg.Roots, hub))),
 		TLSConfig:         tlsCfg,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -120,6 +121,9 @@ func main() {
 			os.Exit(1)
 		}
 	}()
+
+	detector := &completionDetector{c: client, items: items, hub: hub, now: time.Now}
+	go detector.run(ctx, completionPollInterval)
 
 	shouldRestart := false
 	select {
@@ -237,6 +241,10 @@ type respRecorder struct {
 	bytes  int64
 }
 
+// Unwrap lets http.ResponseController reach the underlying writer's Flush
+// (the sse completion stream depends on it).
+func (s *respRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+
 func (s *respRecorder) WriteHeader(code int) {
 	s.status = code
 	s.ResponseWriter.WriteHeader(code)
@@ -288,17 +296,20 @@ func withGzip(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		gz := gzip.NewWriter(w)
-		defer gz.Close()
-		gw := &gzipResponseWriter{ResponseWriter: w, gz: gz}
+		gw := &gzipResponseWriter{ResponseWriter: w}
+		defer gw.close()
 		next.ServeHTTP(gw, r)
 	})
 }
 
+// gzipResponseWriter compresses the response body unless the handler sets
+// Content-Type: text/event-stream, which passes through uncompressed so each
+// sse event reaches the client as soon as it's flushed.
 type gzipResponseWriter struct {
 	http.ResponseWriter
 	gz          *gzip.Writer
 	wroteHeader bool
+	passthrough bool
 }
 
 func (g *gzipResponseWriter) writeHeaderOnce(status int) {
@@ -307,8 +318,13 @@ func (g *gzipResponseWriter) writeHeaderOnce(status int) {
 	}
 	g.wroteHeader = true
 	h := g.ResponseWriter.Header()
-	h.Set("Content-Encoding", "gzip")
-	h.Del("Content-Length") // compressed length unknown until Close()
+	if strings.HasPrefix(h.Get("Content-Type"), "text/event-stream") {
+		g.passthrough = true
+	} else {
+		h.Set("Content-Encoding", "gzip")
+		h.Del("Content-Length") // compressed length unknown until Close()
+		g.gz = gzip.NewWriter(g.ResponseWriter)
+	}
 	g.ResponseWriter.WriteHeader(status)
 }
 
@@ -320,5 +336,30 @@ func (g *gzipResponseWriter) Write(b []byte) (int, error) {
 	if !g.wroteHeader {
 		g.writeHeaderOnce(http.StatusOK)
 	}
+	if g.passthrough {
+		return g.ResponseWriter.Write(b)
+	}
 	return g.gz.Write(b)
+}
+
+// Flush pushes buffered compressed bytes (if any) and then flushes the
+// underlying connection.
+func (g *gzipResponseWriter) Flush() {
+	if g.gz != nil {
+		_ = g.gz.Flush()
+	}
+	_ = http.NewResponseController(g.ResponseWriter).Flush()
+}
+
+func (g *gzipResponseWriter) Unwrap() http.ResponseWriter { return g.ResponseWriter }
+
+// close finishes the gzip stream. a handler that never wrote a header still
+// gets a (valid, empty) gzip body, as before passthrough existed.
+func (g *gzipResponseWriter) close() {
+	if !g.wroteHeader {
+		g.writeHeaderOnce(http.StatusOK)
+	}
+	if g.gz != nil {
+		_ = g.gz.Close()
+	}
 }
